@@ -1,0 +1,33 @@
+# Apptainer recipe wrapping the vendored Empty Epsilon release.
+# Build (where apptainer is available):
+#   ./tools/get_ee.sh
+#   apptainer build vendor/ee.sif tools/ee.def
+# Run headless with our scenarios bind-mounted into the fallback path:
+#   apptainer run --bind "$PWD/scenarios:/tmp/eehome/.emptyepsilon/scripts" \
+#       vendor/ee.sif headless=scenario_90_template.lua startpaused=1
+Bootstrap: library
+From: ubuntu:22.04
+
+%labels
+    Maintainer rkdarst
+    GameVersion EE-2024.12.08
+
+%files
+    # adjust the tag if you fetched a different release with tools/get_ee.sh
+    vendor/EE-2024.12.08/usr/local/bin/EmptyEpsilon /usr/local/bin/EmptyEpsilon
+    vendor/EE-2024.12.08/usr/local/share/emptyepsilon /usr/local/share/emptyepsilon
+
+%post
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        libsdl2-2.0-0 libsdl2-image-2.0-0 libfreetype6 libgl1-mesa-libs \
+        fontconfig
+    rm -rf /var/lib/apt/lists/*
+    mkdir -p /tmp/eehome/.emptyepsilon
+
+%environment
+    export HOME=/tmp/eehome
+    export EE_CONF_DIR=/tmp/eehome/.emptyepsilon
+
+%runscript
+    exec /usr/local/bin/EmptyEpsilon "$@"

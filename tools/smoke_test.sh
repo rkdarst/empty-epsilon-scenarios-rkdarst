@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke-test a scenario: boot the vendored Empty Epsilon headless with the
-# scenario, let init() run, pipe one Lua probe into the stdin console, then
-# kill it and scan the log for script errors.
+# scenario, let init() run for a few ticks, then kill it and scan the log for
+# script errors. (Note: the headless server ignores stdin; probe it via
+# tools/func_test.sh + tools/autotest drivers instead.)
 #
 # Usage: tools/smoke_test.sh scenarios/scenario_NN_name.lua [extra EE args...]
 #   SMOKE_TIMEOUT=25   seconds to keep the game running (default 20)

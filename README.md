@@ -55,6 +55,8 @@ tools/
   get_ee.sh                download+unpack official release -> vendor/EE-<tag>/
   get_deps.sh              download runtime .so deps -> vendor/libs/ (bare hosts)
   smoke_test.sh            headless boot + log assertion (exit 0/1)
+  func_test.sh             headless functional run + assertion driver (exit 0/1)
+  autotest/                self-driving test timelines, appended by func_test.sh
   ee.def                   optional Apptainer recipe (alternative to vendoring)
 vendor/                    git-ignored, fully regrowable by the tools/ scripts
 ```

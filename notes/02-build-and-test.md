@@ -55,7 +55,7 @@ Two runtime gotchas (both verified on this Ubuntu 24.04 box):
 |---|---|
 | `headless=<file.lua>` | boot straight into a scenario, stdin console |
 | `startpaused=1` | start paused (then `setGameSpeed`/unpause via console) |
-| `server_port=35666` | game port (default 35666, TCP) |
+| `server_port=35666` | game port (default 35666, TCP). **Caveat (verified 2026-10, EE 2024.12.08): the headless listener always binds 35666 — this override is not applied to it — and the game segfaults if the bind fails (e.g. a GUI instance already running). The test harnesses pre-check the port and, if busy, retry the game inside a private network namespace (`unshare -rn`), else exit 4 with a hint.** |
 | `scenario_settings=Key=Value;K2=V2` | scenario setting values |
 | `httpserver=8080` | enable HTTP Lua API (unsafe on public nets!) |
 | `headless_name/_password/_internet` | server listing options |
@@ -87,19 +87,57 @@ Two runtime gotchas (both verified on this Ubuntu 24.04 box):
 
 ## Apptainer
 
-`tools/ee.def` wraps the vendored release in an Ubuntu base with SDL2 libs.
+`tools/ee.def` builds a **Debian stable** image (base rootfs pulled from
+Docker Hub as `debian:stable`, so the build host needs registry access —
+the header documents a debootstrap fallback) that *installs* the official
+EE deb with `dpkg -i` + `apt-get -f install -y` (staged at
+`%files → /opt/emptyepsilon.deb`; never `/tmp` — the build masks `/tmp`
+during `%post`, which made apt report "Unsupported file ... given on
+commandline"), so the
+image brings its own SDL2/X11/GL stack — `tools/get_deps.sh` is NOT needed
+inside it. It needs the cached deb in `vendor/` (run `tools/get_ee.sh` first)
+and must be built **from the repo root** (`%files` paths are CWD-relative).
+Docker Hub layers are cached in `~/.apptainer/cache` after the first pull.
 
 ```sh
-apptainer build vendor/ee.sif tools/ee.def
-apptainer run --bind scenarios:/data/eehome/.emptyepsilon/scripts vendor/ee.sif \
-    headless=scenario_90_myscenario.lua startpaused=1
+./tools/get_ee.sh
+apptainer build vendor/ee.sif tools/ee.def                      # as root / --fakeroot
+apptainer build --fakeroot --sandbox vendor/ee-rootfs tools/ee.def  # rootless,
+                                                                  # no squashfs kernel
 ```
 
-Notes: set a writable `HOME`/`EE_CONF_DIR` inside the container (e.g.
-`APPTAINERENV_HOME=/tmp/eehome`); bind-mount your `scenarios/` dir onto
-`$HOME/.emptyepsilon/scripts` so fallback-path discovery works without
-touching the image. Apptainer is not installed on this dev box — build the
-`.sif` where it is available.
+SIF vs sandbox: running a `.sif` rootless mounts its squashfs (kernel module
+or squashfuse+FUSE). If `grep squashfs /proc/filesystems` is empty and there
+is no setuid helper, use the `--sandbox` dir form — functionally identical
+for us. `tools/ee_run.sh` auto-detects `vendor/ee.sif` / `vendor/ee-rootfs`.
+
+Home isolation (the reason we containerize): `$HOME` is a **runtime** bind,
+not something the def file can block. The enforced invocation is
+`apptainer run --contain --no-home ...` — `--no-home` drops the home bind,
+`--contain` additionally drops the auto-bind of your CWD and tmpfs-overlays
+`/tmp` and `/home`. The container's scratch home is `/opt/eehome` (outside
+`/tmp`, so `--contain` cannot hide it); `%environment` sets
+`HOME=/opt/eehome EE_CONF_DIR=/opt/eehome/.emptyepsilon`.
+
+Graphical play (full user test):
+
+```sh
+tools/ee_run.sh                        # mission menu on $DISPLAY; scenarios/
+                                       # bound ro into the fallback scripts dir
+tools/ee_run.sh --exec ls /home        # must be EMPTY: home is invisible
+tools/ee_run.sh --exec cat /etc/debian_version   # sanity: Debian inside
+```
+
+The wrapper binds exactly three things: `scenarios/` (ro),
+`vendor/ee-state/` (persistent `options.ini`, survives read-only SIF runs)
+and `$XAUTHORITY` (the one home *file*, just the X cookie — alternatively
+grant access with `xhost +local:` and unset `XAUTHORITY`). X11 socket,
+`/dev/dri` (GPU; falls back to llvmpipe) and `/dev/snd` are bound when
+present. Gotcha: the binary resolves `resources/` from its CWD, so the
+`%runscript` cds to `/usr/local/share/emptyepsilon` first.
+
+Apptainer is not installed on this dev box (and this repo never installs it)
+— build and play-test on a machine that has it, e.g. the cluster.
 
 ## Recovery from zero (verified 2026-10-02 by wiping vendor/)
 

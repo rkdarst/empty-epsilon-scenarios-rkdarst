@@ -57,6 +57,22 @@ tools/
   smoke_test.sh            headless boot + log assertion (exit 0/1)
   func_test.sh             headless functional run + assertion driver (exit 0/1)
   autotest/                self-driving test timelines, appended by func_test.sh
-  ee.def                   optional Apptainer recipe (alternative to vendoring)
+  ee.def                   Apptainer recipe: Debian image that installs the game deb
+  ee_run.sh                play the Apptainer image (host $HOME hidden)
 vendor/                    git-ignored, fully regrowable by the tools/ scripts
 ```
+
+## Graphical play via Apptainer (optional)
+
+On a machine that has `apptainer` (this repo never installs it):
+
+```sh
+./tools/get_ee.sh && ./tools/ee_run.sh --build   # builds vendor/ee.sif (or
+                                                 # ee-rootfs if kernel lacks squashfs)
+./tools/ee_run.sh                               # play! window on $DISPLAY
+```
+
+The runner always uses `--contain --no-home`, so the game cannot see your
+home directory: only `scenarios/` (read-only), `vendor/ee-state/` for
+settings, and the X11/DRI/snd devices are exposed. Details: notes/02
+"Apptainer".

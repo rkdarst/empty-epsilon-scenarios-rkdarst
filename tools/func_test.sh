@@ -11,6 +11,33 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCEN="${1:?usage: func_test.sh <scenario.lua> [cmds.txt]}"
+
+# EE 2024.12.08 always listens on TCP/UDP 35666 at boot and SEGFAULTS when the
+# bind fails; if another instance owns the port, run the game in a private
+# network namespace (or fail early with a hint).
+EE_NS=()
+if command -v python3 >/dev/null 2>&1 && ! python3 - <<'PYEOF'
+import socket, sys
+for t in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+    s = socket.socket(socket.AF_INET, t)
+    try:
+        s.bind(('', 35666))
+    except OSError:
+        sys.exit(1)
+    finally:
+        s.close()
+sys.exit(0)
+PYEOF
+then
+    if command -v unshare >/dev/null 2>&1; then
+        echo "NOTE: port 35666 busy (another EE instance running?) - using a private netns" >&2
+        EE_NS=(unshare -rn sh -c 'ip link set lo up 2>/dev/null || true; exec "$@"' ee-ns)
+    else
+        echo "ERROR: port 35666 is in use - another Empty Epsilon instance is running on" >&2
+        echo "       this machine. Close it and retry (exit 4)." >&2
+        exit 4
+    fi
+fi
 CMDS="${2:-}"
 [[ -f "$SCEN" ]] || { echo "not a file: $SCEN" >&2; exit 2; }
 BASE="$(basename "$SCEN")"
@@ -38,6 +65,7 @@ cd "$EEHOME/run"
 HOME="$EEHOME" EE_CONF_DIR="$EEHOME/.emptyepsilon" \
 LD_LIBRARY_PATH="${LD_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+${EE_NS[@]+"${EE_NS[@]}"} \
 "$BIN" headless="$BASE" server_port="${SMOKE_PORT:-35781}" < "$FIFO" > ee.log 2>&1 &
 pid=$!
 exec 3>"$FIFO"

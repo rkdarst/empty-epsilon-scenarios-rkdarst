@@ -41,6 +41,27 @@ function active_players()
     return t
 end
 
+-- Stock EE ship templates (incl. the Phobos M3P players start in) ship
+-- WITHOUT any FTL. This map spans many sectors, so install warp drives on
+-- players and transports. Called every tick: cheap (hasWarpDrive guard),
+-- and covers late joiners, respawns and phase-2 transport replacements.
+WARP_SPEED = 1   -- ~1 sector/second: the whole map is ~20 s of warp
+
+function ensure_ftl(players)
+    for _, p in ipairs(players or active_players()) do
+        if p:isValid() and not p:hasWarpDrive() then
+            p:setWarpDrive(true)
+            p:setWarpSpeed(WARP_SPEED)
+        end
+    end
+    for _, t in ipairs(transports) do
+        if t:isValid() and not t:hasWarpDrive() then
+            t:setWarpDrive(true)
+            t:setWarpSpeed(WARP_SPEED)
+        end
+    end
+end
+
 function all_dead(group)
     for _, s in ipairs(group) do
         if s:isValid() then return false end
@@ -527,6 +548,7 @@ function update(delta)
     clock = clock + delta
     if done then return end
     local players = active_players()
+    ensure_ftl(players)
 
     -- Remember positions so drops land where the ship died.
     local tracked = {}
@@ -825,6 +847,18 @@ function probe_warp_sector(sector)
     local x, y = sector_center(tostring(sector))
     for _, p in ipairs(active_players()) do p:setPosition(x, y) end
     print("LC-PROBE players warped to " .. tostring(sector))
+end
+
+function probe_has_ftl()
+    local missing = 0
+    for _, p in ipairs(active_players()) do
+        if p:isValid() and not p:hasWarpDrive() then missing = missing + 1 end
+    end
+    for _, t in ipairs(transports) do
+        if t:isValid() and not t:hasWarpDrive() then missing = missing + 1 end
+    end
+    print("LC-PROBE ships missing warp drive: " .. missing)
+    return missing == 0
 end
 
 function probe_kill_group(name)

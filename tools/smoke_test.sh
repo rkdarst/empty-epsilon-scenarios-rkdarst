@@ -8,11 +8,42 @@
 #   SMOKE_TIMEOUT=25   seconds to keep the game running (default 20)
 #   SMOKE_EE_TAG=EE-... pin the vendored release (default: newest in vendor/)
 #
-# Exit codes: 0 = no errors found; 1 = script errors in log; 2 = setup problem.
+# Exit codes: 0 = no errors found; 1 = script errors in log; 2 = setup problem;
+#             4 = the game's listen port 35666 is already in use (another
+#                 Empty Epsilon instance is running on this machine).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCEN="${1:?usage: smoke_test.sh <scenario.lua> [extra args...]}"
+
+# EE 2024.12.08 always listens on TCP/UDP 35666 at boot (the server_port
+# preference is not applied to the headless listener) and SEGFAULTS when the
+# bind fails. If another instance owns the port, run the game inside a private
+# network namespace instead; if that is unavailable, fail early with a hint.
+EE_NS=()
+if command -v python3 >/dev/null 2>&1 && ! python3 - <<'PYEOF'
+import socket, sys
+for t in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+    s = socket.socket(socket.AF_INET, t)
+    try:
+        s.bind(('', 35666))
+    except OSError:
+        sys.exit(1)
+    finally:
+        s.close()
+sys.exit(0)
+PYEOF
+then
+    if command -v unshare >/dev/null 2>&1; then
+        echo "NOTE: port 35666 busy (another EE instance running?) - using a private netns" >&2
+        EE_NS=(unshare -rn sh -c 'ip link set lo up 2>/dev/null || true; exec "$@"' ee-ns)
+    else
+        echo "ERROR: port 35666 is in use - another Empty Epsilon instance is running on" >&2
+        echo "       this machine (the headless game always binds 35666 and crashes if" >&2
+        echo "       it can't). Close the other instance (GUI game / container) and retry." >&2
+        exit 4
+    fi
+fi
 shift || true
 [[ -f "$SCEN" ]] || { echo "not a file: $SCEN" >&2; exit 2; }
 BASE="$(basename "$SCEN")"
@@ -56,6 +87,7 @@ cd "$EEHOME/run"
 HOME="$EEHOME" EE_CONF_DIR="$EEHOME/.emptyepsilon" \
 LD_LIBRARY_PATH="${LD_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}" \
+${EE_NS[@]+"${EE_NS[@]}"} \
 "$BIN" headless="$BASE" startpaused=1 server_port="$PORT" "$@" \
     <<< 'return "smoke-probe: ok"' > "$EEHOME/run/ee.log" 2>&1 &
 game_pid=$!

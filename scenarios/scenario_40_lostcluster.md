@@ -184,6 +184,12 @@ taste.
   `sectorToXY()`): letters are rows top-to-bottom (A..M), numbers are
   columns left-to-right (1..20), cells are 20u squares. So the map
   A1..M20 is exactly the built-in grid — no custom coordinate work.
+- **Travel**: stock EE ship templates (players spawn in a Phobos M3P) ship
+  with **no FTL at all** — the engine would seal players in their starting
+  sector. The scenario therefore installs warp drives (`setWarpDrive`,
+  speed 1 ≈ one sector/second, so the whole map is ~20 s of warp) on all
+  player ships and transports; warp via the warp dialog is the intended
+  way to move between sectors. No jump drives by design.
 
 ### Factions
 

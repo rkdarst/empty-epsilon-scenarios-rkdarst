@@ -37,7 +37,8 @@ an open-source multiplayer spaceship bridge simulator.
 | `tools/get_deps.sh` | One-time on bare servers: extracts the SDL2 runtime libs the game binary needs into `vendor/libs/` (no root). |
 | `tools/smoke_test.sh` | Boots a scenario headless in a throwaway config dir and greps the log for script errors (boot/syntax check). |
 | `tools/func_test.sh` | Boots a scenario headless *unpaused* and lets it run; if `tools/autotest/lc_autotest.lua` exists it is appended to a copy of the scenario as a timed assertion driver that walks the whole mission (exit 0 = all assertions passed). |
-| `tools/ee.def` | Apptainer recipe that wraps the unpacked release. |
+| `tools/ee.def` | Apptainer recipe: Docker-Hub `debian:stable` base that **installs** the official EE deb (self-contained SDL2/GL stack). Build from the repo root. |
+| `tools/ee_run.sh` | Play/run the image graphically with the host `$HOME` hidden (`--contain --no-home`; only scenarios, `vendor/ee-state` and X11/DRI are exposed). |
 | `vendor/` | Downloaded game (git-ignored, ~300 MB). |
 | `notes/` | Deeper research notes; read before writing scenario code. |
 

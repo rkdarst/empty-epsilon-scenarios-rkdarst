@@ -16,6 +16,7 @@ end
 steps = {
     { t = 3, f = function()
         lc_check(phase == 1, "boots into phase 1")
+        lc_check(probe_has_ftl(), "player ship starts with warp drive")
     end },
     { t = 6, f = function() probe_warp_sector("H5") end },
     { t = 14, f = function()
@@ -40,6 +41,7 @@ steps = {
     { t = 34, f = function()
         lc_check(phase == 2, "all parts delivered starts phase 2")
         lc_check(#transports == 10, "10 transports launched")
+        lc_check(probe_has_ftl(), "transports and players all have warp")
         local books = 0
         for _, n in ipairs(BOOK_NAMES) do if parts[n] then books = books + 1 end end
         lc_check(books == 3, "3 playbooks assigned to freighters")

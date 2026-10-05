@@ -21,8 +21,8 @@ steps = {
     { t = 5, f = function()
         -- Ambient world seeding (counts are deterministic given AMBIENT).
         lc_check(ambient_stats ~= nil and ambient_stats.nebulae >= 40, "ambient nebulae seeded (>=40)")
-        lc_check(ambient_stats and ambient_stats.dust >= 200, "ambient dust belts seeded (>=200)")
-        lc_check(ambient_stats and ambient_stats.rocks >= 30, "ambient asteroids seeded (>=30)")
+        lc_check(ambient_stats and ambient_stats.dust >= 800, "ambient dust belts seeded (>=800)")
+        lc_check(ambient_stats and ambient_stats.rocks >= 300, "ambient asteroid belts seeded (>=300)")
         lc_check(ambient_stats and ambient_stats.mines >= AMBIENT.mine_fields * 4, "ambient minefields seeded")
         lc_check(ambient_stats and ambient_stats.wrecks >= 4 and ambient_stats.traders >= 4,
             "derelicts and ambient traders afloat")
@@ -35,6 +35,7 @@ steps = {
             end
         end
         lc_check(bad == 0, "no ambient mine inside a station keep-out ring")
+        lc_check(probe_watch(), "every active player ship is watched (cargo-eject + transfer comms)")
     end },
     { t = 6, f = function() probe_warp_sector("H5") end },
     { t = 14, f = function()
@@ -117,6 +118,14 @@ steps = {
             lc_check(false, "playbook transfer succeeds alongside the freighter")
         end
         probe_warp_sector("E3")
+    end },
+    { t = 33.5, f = function()
+        -- Ship-to-ship transfer of a carried part: refused at range,
+        -- accepted alongside (probe restores the bookkeeping state).
+        lc_check(probe_transfer("Intel compute nodes", 40000) == false,
+            "ship-to-ship part transfer refused at range")
+        lc_check(probe_transfer("Intel compute nodes", 1000) == true,
+            "ship-to-ship part transfer works alongside")
     end },
     { t = 41, f = function()
         lc_check(phase3.warned, "leaving base triggers the invasion warning")

@@ -150,4 +150,10 @@ code you can paste into `init()`.
 - **Container spawns at station + random(±3u) can be inside the
   station's collision volume**, and artifact pickup is collision-based.
   Spawn pickups on a ring (5u+) outside the hull.
+- **`PlayerSpaceship:setCommsFunction()` works** (verified 2024.12): you
+  can put a comms dialog on player ships so other players can hail them
+  (used for ship-to-ship part transfers). Register from `update()` for
+  late joiners / GM respawns, guarded by a `ship.lc_watched` flag —
+  `init()` only sees the first player ship, and an unhooked respawn would
+  silently keep (or lose) script-tracked mission cargo.
 

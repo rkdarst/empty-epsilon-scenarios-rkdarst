@@ -152,9 +152,11 @@ state (every generator scales from it):
   weapon effects), which also makes the "search the nebulas" beats
   harder - a feature. ~45 % are jittered around cluster centers so the
   sky clumps instead of being uniform.
-- **Dust belts** — `belts` sine-wiggling lines across the middle: mostly
-  `VisualAsteroid` (off-plane decoration, zero collision cost, this is
-  what makes space feel dense) with a thin spine of real `Asteroid`.
+- **Dust belts** — `belts` sine-wiggling lines across the middle. Every
+  node drops `belt_dust` (4) `VisualAsteroid` gravel (off-plane
+  decoration, zero collision cost) *and* `belt_rocks` (2) real
+  `Asteroid`s: ~1500 debris pieces plus ~500 collidable rocks at
+  defaults, so the belts are genuinely hazardous, not just scenery.
 - **Derelict minefields** — `mine_fields` rings of 6 mines (Independent
   faction, triggered by anyone).
 - **Wreck sites** — `wrecks` damaged Independent hulks
@@ -180,15 +182,20 @@ autotest asserts the census and the mine keep-out.
   and a new player ship can be spawned by the GM and resume the
   scenario.
 - Ships carrying objects drop the objects if destroyed.  Dropped objects
-  appear as cargo containers in space.
-- To transfer objects, ships or objects must be within 2u and
-  stationary.
-- To pick up an object, one has to go close to it and hail it.  One
-  option is “We would like to pick you up.“
-- To transfer an object, one has to approach the other ship and hail it.
-  If it is a non-player ship, it will have an option “Please transfer
-  \[object\] to us“.  If it is a player ship, it will have an option “We
-  would like to transfer \[object\] to you.”
+  appear as cargo containers in space.  (Any player ship, including
+  late joiners and GM-spawned replacements, is hooked for this.)
+- To pick up a cargo container, fly over it (contact pickup); the
+  shipping label can only be read from within 5u.  Hailing a container
+  works but only tells you what it is and what to do with it.
+- To transfer an object between ships, both must be stopped within 3u
+  (the scenario keeps its own carry bookkeeping: the 2024.12 script API
+  has no cargo container API, so the ship that the scenario records as
+  carrying a part is the only one that can hand it over or transfer it).
+  Hailing the other ship gives an option: non-player ships that were
+  told to hand something over offer “Please transfer \[object\] to us“;
+  player ships offer “We would like to transfer \[object\] to you.”
+  Civilian freighters must first be hailed with “Please stop for a data
+  transfer” before they accept the alongside transfer.
 - To turn in an object to Lumina 1, one must hail it and an option will
   be to hand over the cargo.
 - Stations can be hailed from anywhere, if it is visible.  Some are not
@@ -196,8 +203,6 @@ autotest asserts the census and the mine keep-out.
 - Friendly stations, civilian ships, and anything required for victory
   should not be destroyable and enemies will not attack them.
 - Non-depending objectives can happen in any order.
-- You must be stationary to pick up or transfer cargo.  There are
-  options to hail the NPC ships to request they stop for the transfer.
 - Undiscovered stations are not hailable until they are found (approach
   within 5u on the radar).
 
@@ -291,6 +296,10 @@ civilian freighter = Atlantis.
 - "Cannot be destroyed" = respawn guards: protected ships/objects that
   are destroyed re-dock or re-drop on the spot, so the mission can never
   become unwinnable.
+- Every player ship (including late joiners and GM respawns, hooked
+  from `update()`) drops its carried parts as containers on death and
+  carries a comms handler so friendlies can hail it for ship-to-ship
+  transfers of undelivered parts.
 - All hail->choice interactions = scripted comms with reply buttons
   (`setCommsFunction()` + `addCommsReply()`).
 

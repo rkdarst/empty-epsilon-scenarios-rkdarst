@@ -45,7 +45,7 @@ end
 -- WITHOUT any FTL. This map spans many sectors, so install warp drives on
 -- players and transports. Called every tick: cheap (hasWarpDrive guard),
 -- and covers late joiners, respawns and phase-2 transport replacements.
-WARP_SPEED = 1   -- ~1 sector/second: the whole map is ~20 s of warp
+WARP_SPEED = 1000   -- 1000 is 60u/second
 
 function ensure_ftl(players)
     for _, p in ipairs(players or active_players()) do
@@ -152,6 +152,8 @@ AMBIENT = {
     nebula_frac = 0.10,   -- ~120 nebulae over the ~90 000 u^2 station box
     nebula_max  = 260,    -- hard cap (0.20 frac would need ~255 clouds)
     belts       = 6,      -- asteroid-dust belts crossing the middle
+    belt_dust   = 4,      -- VisualAsteroid gravel per belt node (decoration)
+    belt_rocks  = 2,      -- real collidable Asteroids per belt node (hazard)
     mine_fields = 5,      -- derelict mine rings (6 mines each)
     wrecks      = 7,      -- derelict hulks, the first this many are mine-ringed
     wreck_mines = 2,
@@ -336,15 +338,15 @@ function ambient_belts()
                 local by = py + dy * U(2) * i + ny * math.sin(i * 0.3) * U(7)
                 if bx > ambient_box.x0 - U(20) and bx < ambient_box.x1 + U(20)
                     and by > ambient_box.y0 - U(20) and by < ambient_box.y1 + U(20) then
-                    for k = 1, 2 do
+                    for k = 1, AMBIENT.belt_dust do
                         local vx, vy = bx + random(-U(4), U(4)), by + random(-U(4), U(4))
                         if ambient_clear(vx, vy, 5) then
                             VisualAsteroid():setSize(random(70, 240)):setPosition(vx, vy)
                             ambient_stats.dust = ambient_stats.dust + 1
                         end
                     end
-                    if i % 3 == 0 then
-                        local vx, vy = bx + random(-U(1), U(1)), by + random(-U(1), U(1))
+                    for k = 1, AMBIENT.belt_rocks do
+                        local vx, vy = bx + random(-U(2), U(2)), by + random(-U(2), U(2))
                         if ambient_clear(vx, vy, 5) then
                             Asteroid():setPosition(vx, vy)
                             ambient_stats.rocks = ambient_stats.rocks + 1
@@ -537,16 +539,34 @@ function mk_station(name, tmpl, fac, x, y, fn)
     return s
 end
 
+-- Hook a player ship: cargo eject on death + a comms handler so other
+-- player ships can hail it for part transfers (design doc: "We would like
+-- to transfer [object] to you"). update() re-runs this for late joiners
+-- and GM-spawned replacements, which otherwise would silently keep (or
+-- lose) mission cargo.
 function watch_player(p)
+    p.lc_watched = true
     p:onDestruction(function(ship, instigator)
+        local dropped = false
         for name, info in pairs(parts) do
             if info.carried == ship and not info.delivered then
                 info.carried = false
                 mk_part(name, ship.lc_x or 0, ship.lc_y or 0)
+                dropped = true
             end
         end
-        lc_notify("Lost contact with a ship! Cargo was ejected. The GM can spawn a replacement ship.")
+        if dropped then
+            lc_notify("Lost contact with a ship! Its cargo was ejected as containers at the wreck. The GM can spawn a replacement ship.")
+        else
+            lc_notify("Lost contact with a ship. The GM can spawn a replacement ship.")
+        end
     end)
+    local ok, err = pcall(function()
+        p:setCommsFunction(function(src)
+            return commsPlayerShip(p, src or comms_source)
+        end)
+    end)
+    if not ok then print("LC: player ship comms unavailable: " .. tostring(err)) end
 end
 
 function spawn_turku_field(ux, uy)
@@ -637,6 +657,14 @@ function lc_who_has()
     else
         s = s .. "LUT 1: rumoured to hold AMD nodes - Tampere 1 has the coordinates, but they are tight-lipped unless you are within 10u of them."
     end
+    local b300 = parts["B300 GPU nodes"]
+    if b300 and not b300.delivered and not b300.carried then
+        if part_out_there("B300 GPU nodes") then
+            s = s .. "\nThe B300 container is adrift in sector C10, where the Kraylor patrol went down."
+        else
+            s = s .. "\nB300 GPU nodes: hijacked by a Kraylor patrol - Tampere 1 tracked them into sector C10."
+        end
+    end
     return s
 end
 
@@ -656,6 +684,10 @@ function act_deliver(station, ship)
 end
 
 function act_collect_tampere(t)
+    local info = parts["H200 GPU nodes"]
+    if info and info.carried and not info.delivered then
+        return "That container is already loaded aboard a recovery ship - deliver it to Lumina 1."
+    end
     if not part_out_there("H200 GPU nodes") then
         local x, y = ring_pos(t, 5)
         mk_part("H200 GPU nodes", x, y)
@@ -665,6 +697,10 @@ function act_collect_tampere(t)
 end
 
 function act_collect_lut(t)
+    local info = parts["AMD compute nodes"]
+    if info and info.carried and not info.delivered then
+        return "That container is already loaded aboard a recovery ship - deliver it to Lumina 1."
+    end
     if not part_out_there("AMD compute nodes") then
         local x, y = ring_pos(t, 5)
         mk_part("AMD compute nodes", x, y)
@@ -687,6 +723,52 @@ function act_transfer_book(t, ship)
         return "Transferring the playbook container into your cargo bay area. Away it goes.", true
     end
     return "Too far - get within 3 units of the hull and hail again.", false
+end
+
+-- Ship-to-ship transfer of a carried part (player ship hails the ship
+-- holding it). act_* so the autotest drives the exact comms-reply logic.
+function act_transfer_part(target, receiver, name)
+    local info = parts[name]
+    if info == nil or info.delivered then return "We are not carrying the " .. name .. "." end
+    if info.carried ~= target then return "We do not have the " .. name .. " aboard." end
+    if receiver == nil or receiver == target then return "We cannot transfer it to the same ship." end
+    if d2(target, receiver) > U(3) ^ 2 then
+        return "Too far - pull alongside us (within 3u), stop, and hail again."
+    end
+    info.carried = receiver
+    lc_notify("Ship-to-ship transfer of the " .. name .. " complete. Deliver it to Lumina 1.")
+    return "Transfer complete - we have handed over the " .. name .. ". Fly it to Lumina 1 to turn it in."
+end
+
+-- Comms handler installed on every player ship by watch_player().
+function commsPlayerShip(t, src)
+    local offered = {}
+    if src ~= t then
+        for _, list in ipairs({ PART_NAMES, BOOK_NAMES }) do
+            for _, n in ipairs(list) do
+                local info = parts[n]
+                if info and info.carried == t and not info.delivered then
+                    table.insert(offered, n)
+                end
+            end
+        end
+    end
+    if #offered == 0 then
+        setCommsMessage("Ship " .. t:getCallSign() .. " here. Nothing to transfer from us.")
+        return true
+    end
+    setCommsMessage("Ship " .. t:getCallSign() .. " here. We are carrying: " .. table.concat(offered, ", ") ..
+        ". Pull alongside (within 3u), stop, and we can transfer it to you.")
+    for _, n in ipairs(offered) do
+        addCommsReply("We would like to transfer the " .. n .. " to us.", function(comms_source, comms_target)
+            math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+            local who = comms_source or src
+            setCommsMessage(act_transfer_part(t, who, n))
+            commsPlayerShip(t, who)
+            return true
+        end)
+    end
+    return true
 end
 
 function commsLumina(t, src)
@@ -876,7 +958,7 @@ function commsTransport(t, src)
         return true
     end
     setCommsMessage("Freighter " .. t:getCallSign() .. " is stopped. We were told to hand over one Ansible Playbook to whoever came looking.")
-    addCommsReply("We would like to transfer the Ansible Playbook.", function(comms_source, comms_target)
+    addCommsReply("Please transfer the Ansible Playbook to us.", function(comms_source, comms_target)
         math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         local who = comms_source or src
         local msg, ok = act_transfer_book(t, who)
@@ -909,6 +991,12 @@ function update(delta)
     local players = active_players()
     ensure_ftl(players)
     lc_pump_messages()
+
+    -- Late joiners and GM respawns: cargo-eject hook + transfer comms on
+    -- every player ship we have not seen before (watch_player marks them).
+    for _, p in ipairs(players) do
+        if p:isValid() and not p.lc_watched then watch_player(p) end
+    end
 
     -- Remember positions so drops land where the ship died.
     local tracked = {}
@@ -1297,6 +1385,37 @@ function probe_arm_wave()
     phase3.warned = true
     phase3.timer = 0
     print("LC-PROBE wave armed with timer 0")
+end
+
+function probe_watch()
+    local n, w = 0, 0
+    for _, p in ipairs(active_players()) do
+        n = n + 1
+        if p.lc_watched then w = w + 1 end
+    end
+    print("LC-PROBE players watched: " .. w .. "/" .. n)
+    return n > 0 and w == n
+end
+
+-- Ship-to-ship transfer exercise: part "carried" by player0, receiver is
+-- a throwaway ship at `dist` units. State is restored before returning.
+function probe_transfer(name, dist)
+    local info = parts[tostring(name)]
+    if info == nil then print("LC-PROBE no such part: " .. tostring(name)) return false end
+    local p = active_players()[1]
+    if p == nil then print("LC-PROBE no player ship") return false end
+    local save_c, save_d = info.carried, info.delivered
+    info.delivered = false
+    info.carried = p
+    local r = CpuShip():setTemplate("Atlantis"):setFaction("Human Navy")
+    local x, y = p:getPosition()
+    r:setPosition(x + (dist or 0), y)
+    local msg = act_transfer_part(p, r, tostring(name))
+    local accepted = info.carried == r
+    r:destroy()
+    info.carried, info.delivered = save_c, save_d
+    print("LC-PROBE transfer dist=" .. tostring(dist) .. " accepted=" .. tostring(accepted) .. " msg=" .. msg)
+    return accepted
 end
 
 function part_out_there(name)

@@ -18,6 +18,24 @@ steps = {
         lc_check(phase == 1, "boots into phase 1")
         lc_check(probe_has_ftl(), "player ship starts with warp drive")
     end },
+    { t = 5, f = function()
+        -- Ambient world seeding (counts are deterministic given AMBIENT).
+        lc_check(ambient_stats ~= nil and ambient_stats.nebulae >= 40, "ambient nebulae seeded (>=40)")
+        lc_check(ambient_stats and ambient_stats.dust >= 200, "ambient dust belts seeded (>=200)")
+        lc_check(ambient_stats and ambient_stats.rocks >= 30, "ambient asteroids seeded (>=30)")
+        lc_check(ambient_stats and ambient_stats.mines >= AMBIENT.mine_fields * 4, "ambient minefields seeded")
+        lc_check(ambient_stats and ambient_stats.wrecks >= 4 and ambient_stats.traders >= 4,
+            "derelicts and ambient traders afloat")
+        local bad = 0
+        for _, m in ipairs(ambient_mines) do
+            if m:isValid() then
+                for _, st in pairs(stations) do
+                    if d2(m, st) < U(5) ^ 2 then bad = bad + 1 end
+                end
+            end
+        end
+        lc_check(bad == 0, "no ambient mine inside a station keep-out ring")
+    end },
     { t = 6, f = function() probe_warp_sector("H5") end },
     { t = 14, f = function()
         lc_check(tampere_state == "ambush" and #groups.ambush == 3, "Tampere ambush warps in on approach")
@@ -50,6 +68,55 @@ steps = {
     { t = 37, f = function()
         lc_check(phase3.armed, "all playbooks delivered arms phase 3")
         probe_warp_sector("E15")
+    end },
+    { t = 28, f = function()
+        -- Comms pickup flow (act_* are the exact functions the comms
+        -- replies call): containers must spawn OUTSIDE the station hull.
+        act_collect_tampere(stations.tampere)
+        local obj = parts["H200 GPU nodes"] and parts["H200 GPU nodes"].obj
+        lc_check(obj ~= nil and obj:isValid(), "Tampere collect spawns the H200 container")
+        lc_check(obj and d2(obj, stations.tampere) > U(4) ^ 2, "H200 container spawns clear of the station hull")
+        lc_check(act_collect_tampere(stations.tampere):find("already") ~= nil, "Tampere collect is idempotent")
+        act_collect_lut(stations.lut)
+        local obj2 = parts["AMD compute nodes"] and parts["AMD compute nodes"].obj
+        lc_check(obj2 ~= nil and obj2:isValid(), "LUT collect spawns the AMD container")
+        lc_check(obj2 and d2(obj2, stations.lut) > U(4) ^ 2, "AMD container spawns clear of the station hull")
+        local cx, cy = obj:getPosition()
+        probe_warp_to(cx + U(4), cy)   -- close enough to read, not touching
+    end },
+    { t = 29.5, f = function()
+        -- Proximity reveal must flip the container even though the engine
+        -- never advances an Artifact through the scan states.
+        lc_check(parts["H200 GPU nodes"].cont.revealed == true, "container reveals its label within 5u")
+        probe_warp_sector("H5")   -- back to calm space while phase 1 ends
+    end },
+    { t = 32, f = function()
+        -- Phase-2 freighter comms: stop action + ranged transfer gate.
+        local tr = nil
+        for _, t in ipairs(transports) do
+            if t:isValid() and t.lc_book and not parts[t.lc_book].given and not parts[t.lc_book].delivered then tr = t break end
+        end
+        lc_check(tr ~= nil, "a playbook freighter is still available")
+        if tr then
+            act_stop_transport(tr)
+            lc_check(tr.lc_stopped == true, "hail can stop a transport")
+            local msg, ok = act_transfer_book(tr, active_players()[1])
+            lc_check(ok == false, "playbook transfer refused at range")
+            local tx, ty = tr:getPosition()
+            probe_warp_to(tx + U(1), ty)
+            lc_autotest_tr = tr
+        end
+    end },
+    { t = 33, f = function()
+        local tr = lc_autotest_tr
+        if tr and tr:isValid() then
+            local msg, ok = act_transfer_book(tr, active_players()[1])
+            lc_check(ok == true, "playbook transfer succeeds alongside the freighter")
+            lc_check(parts[tr.lc_book].obj:isValid(), "playbook container appears next to the freighter")
+        else
+            lc_check(false, "playbook transfer succeeds alongside the freighter")
+        end
+        probe_warp_sector("E3")
     end },
     { t = 41, f = function()
         lc_check(phase3.warned, "leaving base triggers the invasion warning")

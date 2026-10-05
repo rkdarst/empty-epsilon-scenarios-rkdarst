@@ -64,9 +64,9 @@ doing the hiding got destroyed on the way back.  So, you have to go
 search those nebulas to find the data.  There are seven nebulas randomly
 placed nearby (same and adjoining sectors) and the Intel compute nodes
 and Lustre fileservers are randomly hidden in two different of the
-nebulas.  These components appear as cargo containers or similar and one
-must scan them to determine the contents.  There are some decoy
-containers with junk in and around the nebulas.
+nebulas.  These components appear as cargo containers or similar; their
+shipping labels can only be read up close (fly within 5u).  There are
+some decoy containers with junk in and around the nebulas.
 
 When someone returns to station Lumina 1 with cluster components and
 hail it, you can give them the objects you found.  Lumina 1 then says
@@ -136,6 +136,42 @@ horizontally)
 In all areas there is interesting randomly-generated terrain: nebulas,
 asteroids, mines, and other ships.  Some sectors are more dense than
 others.
+
+## Ambient world (implementation)
+
+The environment is seeded in `init()` by `seed_ambient()`, after the
+mission geometry, from the `AMBIENT` constants table near the world
+state (every generator scales from it):
+
+- **Nebula clouds** — `nebula_frac` (default 0.10) of the playable box
+  (the 5 stations' bounding box + 15u margin) is covered. Nebulae are
+  engine-fixed 5U blobs, so coverage -> count uses the box-area formula
+  `n = -ln(1-frac) * area / (pi * 5^2)` (~120 clouds at default;
+  0.20 would need ~255 — capped by `nebula_max`). They blind
+  *long-range radar* only (verified in the 2024.12 reference: no warp or
+  weapon effects), which also makes the "search the nebulas" beats
+  harder - a feature. ~45 % are jittered around cluster centers so the
+  sky clumps instead of being uniform.
+- **Dust belts** — `belts` sine-wiggling lines across the middle: mostly
+  `VisualAsteroid` (off-plane decoration, zero collision cost, this is
+  what makes space feel dense) with a thin spine of real `Asteroid`.
+- **Derelict minefields** — `mine_fields` rings of 6 mines (Independent
+  faction, triggered by anyone).
+- **Wreck sites** — `wrecks` damaged Independent hulks
+  (`setHullMax(50); setHull(4)`, `orderStandGround`) with a
+  VisualAsteroid debris halo; the first `wreck_mines` sites are ringed
+  by 4 mines (salvage hazard).
+- **Traffic** — `traders` extra Independent freighters roaming the box
+  (Neutral to both sides, like the init shuttles).
+- **Wormhole pair** — `wormholes = true` links two far corners of the
+  box (`setTargetPosition`), 12u+ from any station: shortcuts turn the
+  empty middle into a lived-in map. No black hole: it would eat any
+  station within 5U.
+
+Keep-outs: nothing ambient spawns within 5u of a station (8u around
+Lumina 1, so the home radar stays clean); mines demand 8u. All counts
+land in `ambient_stats` and every ambient mine in `ambient_mines`; the
+autotest asserts the census and the mine keep-out.
 
 ## Other notes:
 
@@ -239,9 +275,17 @@ civilian freighter = Atlantis.
   everything else is player-initiated hailing.
 - "Cargo" = physical pickup objects (`Artifact()`), name carried in the
   description; a destroyed carrier drops its cargo.
-- "Scan to see contents" = per-faction scan states with per-state
-  descriptions (`setDescriptionForScanState()`): decoys reveal "junk",
-  real parts reveal their name at full scan.
+- "Scan to see contents" = **proximity reveal**: the engine never
+  advances an `Artifact` through the scan states (only `SpaceShip`s go
+  through them; artifacts are "created fully scanned"), so containers
+  show generic descriptions in *all* scan states and the script flips
+  base + every scan-state description once a player ship comes within
+  5u ("fly close enough to read the shipping label"). Decoys always
+  reveal "junk (spare parts)".
+- Notification hails are sent by the *speaking* station (Tampere 1
+  reports its own clearance, LUT 1 its liberation); only fleet-wide
+  intel comes from Lumina 1. Messages are queued and retried while the
+  player is inside another comms dialog, so nothing is dropped.
 - Hidden stations = invisible to long-range radar until found (a player
   within 40u, or revealed by the hint chain).
 - "Cannot be destroyed" = respawn guards: protected ships/objects that

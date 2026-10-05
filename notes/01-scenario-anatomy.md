@@ -118,3 +118,36 @@ Timers are usually plain countdown variables decremented with `delta`
 Load `scenario_10_empty.lua` in the game, move/place things with the GM
 screen, press **"Copy Scenario"** — the current world is serialized as Lua
 code you can paste into `init()`.
+
+## Comms & artifact pitfalls (learned the hard way, 2026-10)
+
+- **`comms_target` is NOT reliably set for `setCommsFunction` dialogs.**
+  The 2024.12 reference: *"Comms scripts pass globals `comms_target` and
+  `comms_source`. Comms functions pass only `comms_source`"* (and the
+  `setCommsFunction` entry is flagged "TODO: confirm"). Dereferencing
+  `comms_target` inside a comms *function* (or its `addCommsReply`
+  callbacks) can be nil and kills the dialog with a Lua error mid-hail.
+  Bind the target via closure at registration time
+  (`st:setCommsFunction(function(src) return commsX(st, src) end)`) and
+  let every `addCommsReply` callback take the documented two parameters
+  `(comms_source, comms_target)` with an upvalue fallback.
+- **`ScriptSimpleCallback` requires upvalue #1 of the callback to be a
+  table** (the globals table): a callback whose first referenced
+  upvalue is an object/userdata fails at *registration* with
+  `??[convert<ScriptSimpleCallback>::param] Upvalue 1 of function is not
+  a table`. Start such closures with `math.abs(0)` — the documented
+  trick — so the globals table is captured first.
+- **`sendCommsMessage` returns false and drops the message** when the
+  target player is currently in a comms dialog. Queue notifications
+  and retry from `update()` instead of firing once.
+- **Artifacts never advance scan states**: "most SpaceObjects directly
+  switch to fully scanned, only SpaceShips go through all the states".
+  A "scan to reveal" mechanic on an `Artifact` is unreliable — flip all
+  descriptions from the script when the player gets close instead.
+- **`sendCommsMessage` displays the *sender object* it was called on** —
+  route each message through the station that is actually speaking or
+  the UI attributes everything to whoever you hardcoded.
+- **Container spawns at station + random(±3u) can be inside the
+  station's collision volume**, and artifact pickup is collision-based.
+  Spawn pickups on a ring (5u+) outside the hull.
+

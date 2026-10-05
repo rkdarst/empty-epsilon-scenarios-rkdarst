@@ -69,6 +69,14 @@ function all_dead(group)
     return true
 end
 
+-- Fallback ship for comms registration wrappers on engines that pass no
+-- source argument at all (there is no Player.get() in the 2024.12 API).
+function lc_first_player()
+    local ok, list = pcall(getActivePlayerShips)
+    if ok and list and list[1] and list[1]:isValid() then return list[1] end
+    return nil
+end
+
 function leash(group, anchor, radius)
     local ax, ay = anchor:getPosition()
     for _, s in ipairs(group) do
@@ -81,9 +89,36 @@ function leash(group, anchor, radius)
     end
 end
 
-function lc_notify(msg)
-    for _, p in ipairs(active_players()) do
-        stations.lumina:sendCommsMessage(p, msg)
+-- Notifications are queued and delivered by update(): sendCommsMessage
+-- returns false while a player is busy in a comms dialog, and those
+-- messages used to be dropped silently. lc_notify(msg, from) also sends
+-- station-voiced lines from the right station instead of always Lumina 1.
+lc_msgq = {}
+
+function lc_notify(msg, from)
+    table.insert(lc_msgq, { msg = msg, from = from, until_s = clock + 25, done = {} })
+end
+
+function lc_pump_messages()
+    if #lc_msgq == 0 then return end
+    local players = active_players()
+    for i = #lc_msgq, 1, -1 do
+        local q = lc_msgq[i]
+        local sender = q.from
+        if sender == nil or not sender:isValid() then sender = stations.lumina end
+        local waiting = false
+        for _, p in ipairs(players) do
+            local key = p:getCallSign()
+            if key == nil or key == "" then key = tostring(p) end
+            if not q.done[key] then
+                if sender:sendCommsMessage(p, q.msg) then
+                    q.done[key] = true
+                else
+                    waiting = true
+                end
+            end
+        end
+        if not waiting or clock > q.until_s then table.remove(lc_msgq, i) end
     end
 end
 
@@ -110,6 +145,23 @@ guard_slots = {}              -- { name, respawns_left, timer, ships={} }
 phase3 = { armed = false, warned = false, timer = 0, spawned = false }
 taunt_armed = {}
 
+-- Ambient world density knobs (see the ambient section). nebula_frac is
+-- the fraction of the playable box covered by 5U nebula clouds; every
+-- generator scales linearly from these numbers.
+AMBIENT = {
+    nebula_frac = 0.10,   -- ~120 nebulae over the ~90 000 u^2 station box
+    nebula_max  = 260,    -- hard cap (0.20 frac would need ~255 clouds)
+    belts       = 6,      -- asteroid-dust belts crossing the middle
+    mine_fields = 5,      -- derelict mine rings (6 mines each)
+    wrecks      = 7,      -- derelict hulks, the first this many are mine-ringed
+    wreck_mines = 2,
+    traders     = 6,      -- extra Independent traffic (on top of init's shuttles)
+    wormholes   = true,   -- one linked pair far from the station lanes
+}
+ambient_stats = { nebulae = 0, dust = 0, rocks = 0, mines = 0, wrecks = 0, traders = 0, wormholes = 0 }
+ambient_mines = {}
+ambient_box = {}
+
 function part_delivered_count(names)
     local n = 0
     for _, name in ipairs(names) do
@@ -119,32 +171,277 @@ function part_delivered_count(names)
 end
 
 -- ========================= cargo containers =========================
+-- The engine does NOT progress Artifacts through the scan states (only
+-- SpaceShips do; artifacts are "created as fully scanned"), so a reveal
+-- keyed to one scan state can silently never surface in the UI. Instead,
+-- every description starts out generic in ALL scan states, and update()
+-- flips base + every scan state at once when a player comes within 5u -
+-- whichever state the engine consults, the label then reads correctly.
+containers = {}
+
 function mk_container(desc, x, y)
     local a = Artifact():setModel("artifact6"):setPosition(x, y):setSpin(0.3)
-    a:setDescription(desc)
+    a:setDescription("An unmarked cargo container.")
     a:setDescriptionForScanState("notscanned", "An unmarked cargo container.")
     a:setDescriptionForScanState("simplescan", "A cargo container with a worn shipping label.")
-    a:setDescriptionForScanState("fullscan", desc)
-    return a
+    a:setDescriptionForScanState("fullscan", "A cargo container with a worn shipping label, too far away to read the printing.")
+    local c = { a = a, name = nil, desc = desc, junk = false, revealed = false }
+    table.insert(containers, c)
+    return a, c
+end
+
+function lc_reveal_container(c)
+    c.revealed = true
+    if c.a:isValid() then
+        c.a:setDescription(c.desc)
+        c.a:setDescriptionForScanState("notscanned", c.desc)
+        c.a:setDescriptionForScanState("simplescan", c.desc)
+        c.a:setDescriptionForScanState("fullscan", c.desc)
+    end
+    print("LC: container revealed: " .. c.desc)
+end
+
+function lc_reveal_all()
+    for _, c in ipairs(containers) do
+        if not c.revealed then lc_reveal_container(c) end
+    end
 end
 
 function mk_junk(x, y)
-    local a = mk_container("Junk (spare parts).", x, y)
+    local a, c = mk_container("Junk (spare parts).", x, y)
     a:allowPickup(false)
+    c.junk = true
+    c.revealed = true   -- decoys always tell the truth about themselves
+    a:setDescription(c.desc)
+    a:setDescriptionForScanState("notscanned", c.desc)
+    a:setDescriptionForScanState("simplescan", c.desc)
+    a:setDescriptionForScanState("fullscan", c.desc)
+    a:setCommsFunction(function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        setCommsMessage("Automated salvage tag: spare hull plating and scrap parts. Nothing worth recovering.")
+        return true
+    end)
     return a
 end
 
 function mk_part(name, x, y)
     parts[name] = parts[name] or { carried = false, delivered = false }
-    local a = mk_container("Cluster component: " .. name, x, y)
+    local desc = "Cluster component: " .. name
+    for _, b in ipairs(BOOK_NAMES) do
+        if b == name then desc = name .. " - sealed Ansible research data core." end
+    end
+    local a, c = mk_container(desc, x, y)
+    c.name = name
+    parts[name].cont = c
     a:allowPickup(true)
     a:onPickUp(function(art, ship)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         if parts[name].obj == art and art:isValid() then art:destroy() end
         parts[name].carried = ship
         lc_notify("Cargo bay secured: " .. name)
     end)
+    a:setCommsFunction(function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        if c.revealed then
+            setCommsMessage("Automated cargo container. Contents: " .. c.desc .. " Fly over the container to collect it.")
+        else
+            setCommsMessage("Automated cargo container, fleet property. Bring your ship close to read the shipping label, then fly over the container to collect it.")
+        end
+        return true
+    end)
     parts[name].obj = a
     return a
+end
+
+-- Spawn point on a ring around a station, clear of its hull so that a
+-- collision-based pickup is actually reachable.
+function ring_pos(st, u)
+    local ang = random(0, 6.283)
+    local x, y = st:getPosition()
+    return x + math.cos(ang) * U(u), y + math.sin(ang) * U(u)
+end
+
+-- ========================= ambient world =========================
+-- Environmental density so the middle of the map is not empty vacuum:
+-- nebula clouds, asteroid-dust belts, derelict minefields, hulk wreck
+-- sites with debris and civilian traffic. All seeded in init() AFTER the
+-- mission geometry, so keep-out rings around stations win. Nebulae are
+-- engine-fixed 5U blobs that blind long-range radar; VisualAsteroid is
+-- off-plane decoration (zero collision), Asteroid is the real hazard.
+
+function ambient_init_box()
+    local x0, y0, x1, y1
+    for _, st in pairs(stations) do
+        local x, y = st:getPosition()
+        if x0 == nil or x < x0 then x0 = x end
+        if x1 == nil or x > x1 then x1 = x end
+        if y0 == nil or y < y0 then y0 = y end
+        if y1 == nil or y > y1 then y1 = y end
+    end
+    ambient_box = { x0 = x0 - U(15), y0 = y0 - U(15), x1 = x1 + U(15), y1 = y1 + U(15) }
+end
+
+function ambient_clear(x, y, u)
+    for _, st in pairs(stations) do
+        local ox, oy = st:getPosition()
+        local r = u + (st == stations.lumina and 3 or 0)   -- keep the home radar clean
+        if (x - ox) ^ 2 + (y - oy) ^ 2 < U(r) ^ 2 then return false end
+    end
+    return true
+end
+
+function ambient_spot(u)
+    for _ = 1, 30 do
+        local x = random(ambient_box.x0, ambient_box.x1)
+        local y = random(ambient_box.y0, ambient_box.y1)
+        if ambient_clear(x, y, u) then return x, y end
+    end
+    return nil
+end
+
+function ambient_nebulas()
+    local w = (ambient_box.x1 - ambient_box.x0) / 1000
+    local h = (ambient_box.y1 - ambient_box.y0) / 1000
+    local n = math.ceil(-math.log(1 - AMBIENT.nebula_frac) * w * h / (math.pi * 25))
+    n = math.max(10, math.min(AMBIENT.nebula_max, n))
+    local centers = {}
+    for i = 1, math.max(4, math.floor(n / 4)) do
+        local x, y = ambient_spot(8)
+        if x then table.insert(centers, { x = x, y = y }) end
+    end
+    for i = 1, n do
+        local x, y
+        if #centers > 0 and math.random(100) <= 45 then
+            local c = centers[math.random(#centers)]
+            x, y = c.x + random(-U(4), U(4)), c.y + random(-U(4), U(4))
+        else
+            x, y = random(ambient_box.x0, ambient_box.x1), random(ambient_box.y0, ambient_box.y1)
+        end
+        if ambient_clear(x, y, 5) then
+            Nebula():setPosition(x, y)
+            ambient_stats.nebulae = ambient_stats.nebulae + 1
+        end
+    end
+end
+
+function ambient_belts()
+    for b = 1, AMBIENT.belts do
+        local px, py = ambient_spot(10)
+        if px then
+            local ang = random(0, 6.283)
+            local dx, dy = math.cos(ang), math.sin(ang)
+            local nx, ny = -dy, dx
+            for i = 0, 44 do
+                local bx = px + dx * U(2) * i + nx * math.sin(i * 0.3) * U(7)
+                local by = py + dy * U(2) * i + ny * math.sin(i * 0.3) * U(7)
+                if bx > ambient_box.x0 - U(20) and bx < ambient_box.x1 + U(20)
+                    and by > ambient_box.y0 - U(20) and by < ambient_box.y1 + U(20) then
+                    for k = 1, 2 do
+                        local vx, vy = bx + random(-U(4), U(4)), by + random(-U(4), U(4))
+                        if ambient_clear(vx, vy, 5) then
+                            VisualAsteroid():setSize(random(70, 240)):setPosition(vx, vy)
+                            ambient_stats.dust = ambient_stats.dust + 1
+                        end
+                    end
+                    if i % 3 == 0 then
+                        local vx, vy = bx + random(-U(1), U(1)), by + random(-U(1), U(1))
+                        if ambient_clear(vx, vy, 5) then
+                            Asteroid():setPosition(vx, vy)
+                            ambient_stats.rocks = ambient_stats.rocks + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+function ambient_wrecks()
+    local hulks = { "Flavia", "Odin", "Stalker Q7", "Nirvana R5", "Atlantis X23" }
+    for i = 1, AMBIENT.wrecks do
+        local x, y = ambient_spot(6)
+        if x then
+            local s = CpuShip():setTemplate(hulks[math.random(#hulks)]):setFaction("Independent")
+                :setPosition(x, y):setCallSign("Derelict " .. i)
+            pcall(function() s:setHullMax(50); s:setHull(4) end)  -- battered hulk
+            s:orderStandGround()
+            ambient_stats.wrecks = ambient_stats.wrecks + 1
+            for k = 1, 12 do   -- debris halo around the hulk
+                local vx, vy = x + random(-U(3), U(3)), y + random(-U(3), U(3))
+                VisualAsteroid():setSize(random(60, 220)):setPosition(vx, vy)
+                ambient_stats.dust = ambient_stats.dust + 1
+            end
+            if i <= AMBIENT.wreck_mines then   -- salvage sites guarded by old mines
+                for k = 1, 4 do
+                    local a2 = random(0, 6.283)
+                    local mx, my = x + math.cos(a2) * U(2.5), y + math.sin(a2) * U(2.5)
+                    if ambient_clear(mx, my, 5) then
+                        local m = Mine():setFaction("Independent"):setPosition(mx, my)
+                        table.insert(ambient_mines, m)
+                        ambient_stats.mines = ambient_stats.mines + 1
+                    end
+                end
+            end
+        end
+    end
+end
+
+function ambient_mine_fields()
+    for f = 1, AMBIENT.mine_fields do
+        local x, y = ambient_spot(10)
+        if x then
+            for i = 1, 6 do
+                local ang = (i - 1) * 1.047 + random(-0.2, 0.2)
+                local r = U(2) + random(-U(1), U(1))
+                local mx, my = x + math.cos(ang) * r, y + math.sin(ang) * r
+                if ambient_clear(mx, my, 8) then
+                    local m = Mine():setFaction("Independent"):setPosition(mx, my)
+                    table.insert(ambient_mines, m)
+                    ambient_stats.mines = ambient_stats.mines + 1
+                end
+            end
+        end
+    end
+end
+
+function ambient_traders()
+    for i = 1, AMBIENT.traders do
+        local x, y = ambient_spot(6)
+        if x then
+            CpuShip():setTemplate("Atlantis"):setFaction("Independent")
+                :setPosition(x, y):setCallSign("Trader " .. i)
+                :orderRoamingAt(random(ambient_box.x0, ambient_box.x1), random(ambient_box.y0, ambient_box.y1))
+            ambient_stats.traders = ambient_stats.traders + 1
+        end
+    end
+end
+
+function ambient_wormholes()
+    local ax, ay = ambient_spot(12)
+    if ax == nil then return end
+    local bx, by = ambient_box.x1 - (ax - ambient_box.x0), ambient_box.y1 - (ay - ambient_box.y0)
+    if not ambient_clear(bx, by, 12) then return end
+    local a = WormHole():setPosition(ax, ay)
+    local b = WormHole():setPosition(bx, by)
+    a:setTargetPosition(bx, by)
+    b:setTargetPosition(ax, ay)
+    ambient_stats.wormholes = 2
+end
+
+function seed_ambient()
+    ambient_init_box()
+    ambient_nebulas()
+    ambient_belts()
+    ambient_wrecks()
+    ambient_mine_fields()
+    ambient_traders()
+    if AMBIENT.wormholes then ambient_wormholes() end
+    local total = 0
+    for _, v in pairs(ambient_stats) do total = total + v end
+    print("LC: ambient seeded nebulae=" .. ambient_stats.nebulae .. " dust=" .. ambient_stats.dust ..
+        " rocks=" .. ambient_stats.rocks .. " mines=" .. ambient_stats.mines ..
+        " wrecks=" .. ambient_stats.wrecks .. " traders=" .. ambient_stats.traders ..
+        " wormholes=" .. ambient_stats.wormholes .. " total=" .. total)
 end
 
 -- ========================= init =========================
@@ -217,14 +514,26 @@ function init()
 moved to hidden facilities across the sector. Kajaani 1 was supposed to ship the first batch - they are
 on the far side of the map, near sector ]] .. getSectorName(kx, ky) ..
     [[. Start with them. Scan anything suspicious; cargo containers reveal their
-contents only under a full scan.]])
+contents only once you fly close enough to read the shipping label.]])
+    -- Ambient environment (nebulas, dust belts, derelict mines, wrecks,
+    -- traffic, a wormhole pair) everywhere the mission does not live.
+    seed_ambient()
+
     print("LC: init complete, phase=" .. phase)
 end
 
 function mk_station(name, tmpl, fac, x, y, fn)
     local s = SpaceStation():setTemplate(tmpl):setFaction(fac):setPosition(x, y)
     s:setCallSign(name)
-    if fn then s:setCommsFunction(fn) end
+    if fn then
+        local st = s
+        -- Bind the target via closure: comms *functions* are documented to
+        -- receive only comms_source, so never rely on the comms_target global.
+        st:setCommsFunction(function(src)
+            math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+            return fn(st, src or comms_source or lc_first_player())
+        end)
+    end
     return s
 end
 
@@ -332,33 +641,137 @@ function lc_who_has()
 end
 
 function carrying_any(ship)
+    if ship == nil then return false end
     for _, info in pairs(parts) do
         if info.carried == ship and not info.delivered then return true end
     end
     return false
 end
 
-function commsLumina()
+-- Reply effects live in act_* functions: no comms globals in there, so the
+-- autotest driver can invoke the exact same logic headless.
+
+function act_deliver(station, ship)
+    return deliver_to_lumina(ship)
+end
+
+function act_collect_tampere(t)
+    if not part_out_there("H200 GPU nodes") then
+        local x, y = ring_pos(t, 5)
+        mk_part("H200 GPU nodes", x, y)
+        return "We float a container out to you - it is just outside the station."
+    end
+    return "The container is already out there - check your sensors."
+end
+
+function act_collect_lut(t)
+    if not part_out_there("AMD compute nodes") then
+        local x, y = ring_pos(t, 5)
+        mk_part("AMD compute nodes", x, y)
+        return "Container is away, just outside the station."
+    end
+    return "It is already outside - check short-range sensors."
+end
+
+function act_stop_transport(t)
+    t:orderIdle()
+    t.lc_stopped = true
+    return "Fine, we are stopping. Pull alongside, stop, and hail us to initiate the transfer."
+end
+
+function act_transfer_book(t, ship)
+    if ship and d2(ship, t) < U(3) ^ 2 then
+        parts[t.lc_book].given = true
+        local x, y = t:getPosition()
+        mk_part(t.lc_book, x + 1500, y + 1500)
+        return "Transferring the playbook container into your cargo bay area. Away it goes.", true
+    end
+    return "Too far - get within 3 units of the hull and hail again.", false
+end
+
+function commsLumina(t, src)
     setCommsMessage("Lumina 1 here.\n" .. lc_status())
-    commsLumina_replies()
+    commsLumina_replies(t, src)
     return true
 end
 
-function commsLumina_replies()
-    addCommsReply("What is the mission status?", function()
+function commsLumina_replies(t, src)
+    addCommsReply("What is the mission status?", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         setCommsMessage(lc_status())
-        commsLumina_replies()
+        commsLumina_replies(t, comms_source or src)
+        return true
     end)
-    addCommsReply("Who might have the cluster hardware?", function()
+    addCommsReply("Who might have the cluster hardware?", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         setCommsMessage(lc_who_has())
-        commsLumina_replies()
+        commsLumina_replies(t, comms_source or src)
+        return true
     end)
-    if carrying_any(comms_source) then
-        addCommsReply("Hand over the recovered equipment.", function()
-            setCommsMessage(deliver_to_lumina(comms_source))
-            commsLumina_replies()
+    if carrying_any(src) then
+        addCommsReply("Hand over the recovered equipment.", function(comms_source, comms_target)
+            math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+            local who = comms_source or src
+            setCommsMessage(act_deliver(t, who))
+            commsLumina_replies(t, who)
+            return true
         end)
     end
+end
+
+function commsKajaani(t, src)
+    setCommsMessage([[Kajaani 1. Our stores were looted - the whole supercomputer shipment is gone.
+We were supposed to ship the first batch to Lumina 1. Whoever did this also hit Tampere 1 and Turku 1;
+those two went dark with their stations, moving out of long-range radar.]])
+    addCommsReply("Where are Tampere 1 and Turku 1?", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        known.tampere = true
+        known.turku = true
+        setCommsMessage([[ Tampere 1 last pinged near sector ]] .. hint_sector(stations.tampere) ..
+            [[ and Turku 1 near sector ]] .. hint_sector(stations.turku) ..
+            [[. The reply beacon drifts, so they can be up to 50u from those sector squares.
+If you find out anything about LUT 1, they were moving AMD nodes - but that is all we know.]])
+        commsKajaani(t, comms_source or src)
+        return true
+    end)
+    addCommsReply("We will look around.", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        setCommsMessage("Good luck out there.")
+        return true
+    end)
+    return true
+end
+
+function commsTampere(t, src)
+    if tampere_state == "ambush" then
+        setCommsMessage([[Tampere 1: we are under attack! Clear those ships from around us before we can talk.]])
+        return true
+    end
+    setCommsMessage([[Tampere 1 here. We still have the H200 GPU nodes, hidden in the nebula around us.
+The B300 GPU nodes were taken by Kraylor ships - our trackers say they headed for sector C10.]])
+    addCommsReply("Collect the H200 GPU nodes.", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        setCommsMessage(act_collect_tampere(t))
+        commsTampere(t, comms_source or src)
+        return true
+    end)
+    addCommsReply("What about LUT 1?", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        local near = false
+        for _, p in ipairs(active_players()) do
+            if d2(p, t) < U(10) ^ 2 then near = true break end
+        end
+        if near then
+            known.lut = true
+            setCommsMessage([[Fine - you have earned it. LUT 1 sits near sector ]] .. hint_sector(stations.lut) ..
+                [[ with our AMD compute nodes. But something is wrong there: their last transmissions were... wrong. Attack anything Kraylor-painted nearby, and do not go in alone.]])
+        else
+            setCommsMessage("That information is confidential. Approach within 10 units of us and we will talk.")
+        end
+        commsTampere(t, comms_source or src)
+        return true
+    end)
+    return true
 end
 
 function deliver_to_lumina(ship)
@@ -404,96 +817,46 @@ function deliver_to_lumina(ship)
     return msg
 end
 
-function commsKajaani()
-    setCommsMessage([[Kajaani 1. Our stores were looted - the whole supercomputer shipment is gone.
-We were supposed to ship the first batch to Lumina 1. Whoever did this also hit Tampere 1 and Turku 1;
-those two went dark with their stations, moving out of long-range radar.]])
-    addCommsReply("Where are Tampere 1 and Turku 1?", function()
-        known.tampere = true
-        known.turku = true
-        setCommsMessage([[ Tampere 1 last pinged near sector ]] .. hint_sector(stations.tampere) ..
-            [[ and Turku 1 near sector ]] .. hint_sector(stations.turku) ..
-            [[. The reply beacon drifts, so they can be up to 50u from those sector squares.
-If you find out anything about LUT 1, they were moving AMD nodes - but that is all we know.]])
-        commsKajaani()
-    end)
-    addCommsReply("We will look around.", function() setCommsMessage("Good luck out there.") end)
-    return true
-end
-
-function commsTampere()
-    if tampere_state == "ambush" then
-        setCommsMessage([[Tampere 1: we are under attack! Clear those ships from around us before we can talk.]])
-        return true
-    end
-    setCommsMessage([[Tampere 1 here. We still have the H200 GPU nodes, hidden in the nebula around us.
-The B300 GPU nodes were taken by Kraylor ships - our trackers say they headed for sector C10.]])
-    addCommsReply("Collect the H200 GPU nodes.", function()
-        if not part_out_there("H200 GPU nodes") then
-            local x, y = comms_target:getPosition()
-            mk_part("H200 GPU nodes", x + random(-3000, 3000), y + random(-3000, 3000))
-            setCommsMessage("We float a container out to you - it is just outside the station.")
-        else
-            setCommsMessage("The container is already out there - check your sensors.")
-        end
-        commsTampere()
-    end)
-    addCommsReply("What about LUT 1?", function()
-        local near = false
-        for _, p in ipairs(active_players()) do
-            if d2(p, comms_target) < U(10) ^ 2 then near = true break end
-        end
-        if near then
-            known.lut = true
-            setCommsMessage([[Fine - you have earned it. LUT 1 sits near sector ]] .. hint_sector(stations.lut) ..
-                [[ with our AMD compute nodes. But something is wrong there: their last transmissions were... wrong. Attack anything Kraylor-painted nearby, and do not go in alone.]])
-        else
-            setCommsMessage("That information is confidential. Approach within 10 units of us and we will talk.")
-        end
-        commsTampere()
-    end)
-    return true
-end
-
-function commsTurku()
+function commsTurku(t, src)
     setCommsMessage([[Turku 1. We were attacked, so we hid the Intel compute nodes and the Lustre
 fileserver in cargo containers across seven nebulas around us - our courier ship made it that far before
-it was shot down. The containers only say what is inside under a full scan; the Kraylor left junk
-decoys behind. LUT 1 has the AMD nodes, if they are still ours to ask.]])
-    addCommsReply("Anything else?", function()
+it was shot down. The containers only say what is inside once you are right next to them; the Kraylor
+left junk decoys behind. LUT 1 has the AMD nodes, if they are still ours to ask.]])
+    addCommsReply("Anything else?", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         setCommsMessage("The nebula shadows hide things at long range. Fly into each one and sweep with short-range sensors.")
-        commsTurku()
+        commsTurku(t, comms_source or src)
+        return true
     end)
     return true
 end
 
-function commsLUT()
+function commsLUT(t, src)
     if lut_state == "hostile" then
         setCommsMessage([[Alone you are weak and we will be victorious! Come back with more people, or stay away.]])
         return true
     end
     if lut_state == "friendly" then
         setCommsMessage([[LUT 1, operations. The AMD compute node shipment is still in our bay. Is there a problem?]])
-        addCommsReply("We will check the perimeter.", function() setCommsMessage("Understood. Sensors show Kraylor signatures on the station - be careful.") end)
+        addCommsReply("We will check the perimeter.", function(comms_source, comms_target)
+            math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+            setCommsMessage("Understood. Sensors show Kraylor signatures on the station - be careful.")
+            return true
+        end)
         return true
     end
     setCommsMessage([[LUT 1 is back under our control - and that was no accident; they were already inside
 when we opened the doors. The AMD compute nodes are aboard; we are floating the container out to you.]])
-    addCommsReply("Collect the AMD compute nodes.", function()
-        if not part_out_there("AMD compute nodes") then
-            local x, y = comms_target:getPosition()
-            mk_part("AMD compute nodes", x + random(-3000, 3000), y + random(-3000, 3000))
-            setCommsMessage("Container is away, just outside the station.")
-        else
-            setCommsMessage("It is already outside - check short-range sensors.")
-        end
-        commsLUT()
+    addCommsReply("Collect the AMD compute nodes.", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        setCommsMessage(act_collect_lut(t))
+        commsLUT(t, comms_source or src)
+        return true
     end)
     return true
 end
 
-function commsTransport()
-    local t = comms_target
+function commsTransport(t, src)
     if t.lc_book == nil then
         setCommsMessage("Freighter " .. t:getCallSign() .. ", standard cargo between the stations. Nothing for you here.")
         return true
@@ -504,26 +867,22 @@ function commsTransport()
     end
     if not t.lc_stopped then
         setCommsMessage("Freighter " .. t:getCallSign() .. " here, busy on a run.")
-        addCommsReply("Please stop for a data transfer.", function()
-            t:orderIdle()
-            t.lc_stopped = true
-            setCommsMessage("Fine, we are stopping. Pull alongside, stop, and hail us to initiate the transfer.")
-            commsTransport()
+        addCommsReply("Please stop for a data transfer.", function(comms_source, comms_target)
+            math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+            setCommsMessage(act_stop_transport(t))
+            commsTransport(t, comms_source or src)
+            return true
         end)
         return true
     end
     setCommsMessage("Freighter " .. t:getCallSign() .. " is stopped. We were told to hand over one Ansible Playbook to whoever came looking.")
-    addCommsReply("We would like to transfer the Ansible Playbook.", function()
-        if d2(comms_source, t) < U(2) ^ 2 then
-            parts[t.lc_book].given = true
-            local x, y = t:getPosition()
-            mk_part(t.lc_book, x + 1500, y + 1500)
-            setCommsMessage("Transferring the playbook container into your cargo bay area. Away it goes.")
-            commsTransport()
-        else
-            setCommsMessage("Too far - get within 2 units and stop first.")
-            commsTransport()
-        end
+    addCommsReply("We would like to transfer the Ansible Playbook.", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        local who = comms_source or src
+        local msg, ok = act_transfer_book(t, who)
+        setCommsMessage(msg)
+        commsTransport(t, who)
+        return true
     end)
     return true
 end
@@ -549,6 +908,7 @@ function update(delta)
     if done then return end
     local players = active_players()
     ensure_ftl(players)
+    lc_pump_messages()
 
     -- Remember positions so drops land where the ship died.
     local tracked = {}
@@ -561,6 +921,20 @@ function update(delta)
         if s:isValid() then
             local x, y = s:getPosition()
             s.lc_x, s.lc_y = x, y
+        end
+    end
+
+    -- Cargo containers reveal their shipping labels at close range: the
+    -- engine never advances an Artifact's scan state, so we flip every
+    -- description (base + all scan states) once a player is within 5u.
+    for _, c in ipairs(containers) do
+        if not c.revealed and c.a:isValid() then
+            for _, p in ipairs(players) do
+                if d2(p, c.a) < U(5) ^ 2 then
+                    lc_reveal_container(c)
+                    break
+                end
+            end
         end
     end
 
@@ -589,7 +963,7 @@ function update(delta)
         leash(groups.ambush, stations.tampere, U(22))
         if all_dead(groups.ambush) then
             tampere_state = "clear"
-            lc_notify("Tampere 1: the ships around us are gone. The area is clear - hail us.")
+            lc_notify("Tampere 1: the ships around us are gone. The area is clear - hail us.", stations.tampere)
         end
     end
 
@@ -597,9 +971,9 @@ function update(delta)
     if not turku_greeted then
         for _, p in ipairs(players) do
             if d2(p, stations.turku) < U(20) ^ 2 then
-                stations.turku:sendCommsMessage(p, [[Turku 1 here! We hid the Intel compute nodes and the
-Lustre server in cargo containers across seven nebulas around us. Full-scan everything - the Kraylor
-scattered junk decoys among them.]])
+                lc_notify([[Turku 1 here! We hid the Intel compute nodes and the
+Lustre server in cargo containers across seven nebulas around us. Fly close to every
+container to read the labels - the Kraylor scattered junk decoys among them.]], stations.turku)
                 turku_greeted = true
                 break
             end
@@ -635,7 +1009,7 @@ Come back with more people, or stay away.]])
         if all_dead(groups.lut) then
             lut_state = "liberated"
             stations.lut:setFaction("Human Navy")
-            lc_notify("LUT 1 is back under Human Navy control. The AMD compute nodes are aboard - hail the station.")
+            lc_notify("LUT 1 is back under Human Navy control. The AMD compute nodes are aboard - hail the station.", stations.lut)
         end
     end
 
@@ -679,7 +1053,7 @@ function tampere_ambush()
         if #players > 0 then s:orderAttack(players[1]) else s:orderRoaming() end
         table.insert(groups.ambush, s)
     end
-    lc_notify("Unidentified ships warping in around Tampere 1!")
+    lc_notify("Unidentified ships warping in around Tampere 1!", stations.tampere)
 end
 
 function lut_reveal()
@@ -714,7 +1088,10 @@ function phase2_start()
         t.lc_book = nil
         t.lc_next = nil
         t:setDescriptionForScanState("fullscan", "A civilian freighter. Cargo manifest: routine supplies.")
-        t:setCommsFunction(commsTransport)
+        local tr = t
+        tr:setCommsFunction(function(src)
+            return commsTransport(tr, src or comms_source or lc_first_player())
+        end)
         t:onDestruction(transport_died)
         table.insert(transports, t)
     end
@@ -790,7 +1167,10 @@ function mk_transport_like(old)
     t.lc_book = nil
     t.lc_next = nil
     t:setDescriptionForScanState("fullscan", "A civilian freighter. Cargo manifest: routine supplies.")
-    t:setCommsFunction(commsTransport)
+    local tr = t
+    tr:setCommsFunction(function(src)
+        return commsTransport(tr, src or comms_source or lc_first_player())
+    end)
     t:onDestruction(transport_died)
     return t
 end
@@ -847,6 +1227,19 @@ function probe_warp_sector(sector)
     local x, y = sector_center(tostring(sector))
     for _, p in ipairs(active_players()) do p:setPosition(x, y) end
     print("LC-PROBE players warped to " .. tostring(sector))
+end
+
+function probe_warp_to(x, y)
+    for _, p in ipairs(active_players()) do p:setPosition(x, y) end
+    print("LC-PROBE players warped to " .. tostring(x) .. "," .. tostring(y))
+end
+
+function probe_containers()
+    for _, c in ipairs(containers) do
+        print("LC-CONT name=" .. tostring(c.name or c.desc) ..
+            " revealed=" .. tostring(c.revealed) ..
+            " valid=" .. tostring(c.a:isValid()))
+    end
 end
 
 function probe_has_ftl()

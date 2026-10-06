@@ -1,0 +1,233 @@
+# Lost Cluster (lite) — translation exercise for the EE mission DSL (v0.1).
+# Condensed skeleton of scenarios/scenario_40_lostcluster.lua: hint chain,
+# approach ambush, stolen cargo, delivery, victory. The point is to find
+# what the DSL CANNOT say: every `scripts:` block and GAP comment below is
+# a schema gap. Gap inventory: notes/05 "Gap harvest".
+# Generated-style twin: scenarios/scenario_41_lostcluster_dsl.lua
+
+version: 0.1
+
+meta:
+  name: Lost Cluster (DSL lite)
+  description: >
+    A looted research cluster is scattered across the sector. Trace the
+    hint chain, clear the ambush at Tampere 1, and deliver the recovered
+    hardware to Lumina 1. Condensed DSL-coverage demo of Lost Cluster.
+  type: Mission
+  api: EE-2024.12.08
+  setting:
+    mode: fixed                  # GAP-8: generated layouts deferred; the
+                                 # two "systems" here are map regions
+  options:
+    ambush:
+      type: select
+      description: Tampere 1 ambush strength
+      values: [light, heavy]
+      default: light
+
+world:
+  systems: [home, deep]
+  links:
+    - home <-> deep              # bridged by the wormhole below (fixed mode:
+                                 # a "link" is whatever codegen materialises)
+  stars:
+    home: {class: G, has_life: true}
+    deep: {class: M, has_nebula: true}
+
+  wormholes:
+    gate:                        # generator applies the 3.5U exit offset +
+      a: {system: home, position: [60000, 0]}      # re-entry guard (note 01)
+      b: {system: deep, position: [140000, 20000]}
+
+  ships:
+    player:                      # GAP-7: comms exist only on stations —
+      at_start: true             # LC's ship-to-ship part transfers
+      system: home               # (commsPlayerShip) are unrepresentable.
+      position: [3000, 13000]
+      template: Phobos M3P
+      faction: Human Navy
+      player: true
+      credits: 0
+      ftl: warp                  # GAP-6: stock templates ship without FTL;
+                                 # needs an explicit default (LC ensure_ftl)
+    raider:                      # B300 thieves: hold the area, drop loot
+      at_start: false            # GAP-3: no on_destroy -> drop semantics
+      template: Adder MK5
+      faction: Kraylor
+      ai: defend
+    ambusher:                    # Tampere screen: spawned by a watcher
+      at_start: false            # (GAP-1/2 below); LC's leash(group,
+      template: Piranha F12      # anchor, radius) behaviour spec is
+      faction: Kraylor           # missing (GAP-5: no patrol/leash spec)
+
+  stations:
+    lumina:
+      system: home
+      faction: Human Navy
+      position: [0, 10000]
+      comms: lumina
+    tampere:                     # GAP-4: no `hidden: nebula` (radar shadow
+      system: deep               # until found) — LC does it with Nebula()
+      faction: Human Navy        # + a found[] watcher. Here the station
+      position: [150000, 20000]  # is simply visible.
+      comms: tampere
+    kajaani:
+      system: deep
+      faction: Human Navy
+      position: [200000, -30000]
+      comms: kajaani
+
+items:
+  h200:
+    label: H200 GPU nodes
+    instance: one_of
+    spawn_as: teleport_object    # hand-to-hand give: exists in the buyer's
+  b300:                          # cargo the moment the reply is clicked
+    label: B300 GPU nodes
+    instance: one_of
+    spawn_as: teleport_object
+    # GAP-9: no `initial:` placement. The B300 must EXIST in the world
+    # before pickup — its drop is a watcher (scripts), and picking up is
+    # proximity bookkeeping (GAP-2 + LC-style parts table).
+
+flags:                           # (once: flags auto-declared)
+  ambush_spawned: false
+  ambush_cleared: false
+  b300_dropped: false
+  h200_delivered: false
+  b300_delivered: false
+dialogs:
+  lumina:
+    greeting: intro
+    pages:
+      intro:
+        text: "Lumina 1 here. Our research cluster was looted - Kajaani 1 was supposed to ship the first batch. Tampere 1 went dark on the deep side. Start with Kajaani."
+        replies:
+          - text: "Here's the H200 GPU nodes."
+            when: "has(player, h200)"
+            do: ["take player h200", "set flags.h200_delivered true",
+                 "hint: That's the compute backbone. Anything else?"]
+            say: "The H200 nodes! Kajaani will be relieved."
+            then: {replies: intro}
+          - text: "We found the B300 nodes too."
+            when: "has(player, b300)"
+            do: ["take player b300", "set flags.b300_delivered true",
+                 "hint: The whole batch is back. Well flown."]
+            say: "Recovered! You've put the cluster back together, spacer."
+            then: {replies: intro}
+          - {text: "What do you know about the thieves?", to: intel,
+             once: told_intel}
+          - {say: "Fly safe, spacer - the sector's yours to sweep."}
+      intel:
+        text: "Kraylor raiders, by the wreckage marks. Kajaani 1 was hit first; Tampere 1 went dark in the deep-system nebulae."
+        replies:
+          - {text: Back, to: intro}
+  tampere:
+    greeting: intro
+    pages:
+      intro:
+        text: "Tampere 1... we were boarded. Those ships outside - they've pinned us down."
+        replies:
+          - text: "You're clear now. The H200 nodes?"
+            when: "flags.ambush_spawned and n_alive(ambusher) == 0"
+            do: ["give player h200",
+                 "hint: The H200 nodes are aboard. Deliver them to Lumina 1."]
+            say: "Take them - they were always for Lumina 1. The thieves took the B300s toward the gate."
+            then: {replies: intro}
+          - {when: "not flags.ambush_spawned",
+             say: "We're holding, but those ships out there won't let us move a crate."}
+          - {when: "flags.ambush_spawned and n_alive(ambusher) > 0",
+             say: "Please - clear the ships off us first."}
+  kajaani:
+    greeting: intro
+    pages:
+      intro:
+        text: "Kajaani 1. Our stores were looted - the whole supercomputer shipment is gone. Tampere 1 and the others went dark with theirs."
+        replies:
+          - {text: "Who would hit a research convoy?", to: intel}
+          - text: "Where is Tampere 1?"
+            once: told_tampere
+            do: ["hint: Tampere 1 last pinged in the deep-system nebulae, near the gate."]
+            say: "Last ping came from the deep-system nebulae by the gate. If anyone had the first batch, Tampere did."
+            then: {replies: intro}
+          - {when: "flags.told_intel",
+             say: "Kraylor marks, we said. Everything points at the raiders."}
+      intel:
+        text: "Convoy escort logs say Kraylor marks on the boarding pods. Same signature that hit Tampere 1 and the deep-side freighters."
+        replies:
+          - {text: Back, to: intro}
+
+# events: exactly one of after:/after_flag:, one-shot. TIME-driven only.
+# GAP-1: no conditional event (when-only) — every non-time trigger below
+# had to fall down to raw Lua. Proposed v0.2: `watch:` entries.
+events:
+  thieves:
+    after: 20
+    when: "true"
+    do:
+      - "spawn 2 raider in deep at gate.b"
+      - "message: Long-range radar: Kraylor signatures hauling cargo near the deep-side gate."
+
+stages:                          # last matching when wins; default first.
+  - when: "true"                 # GAP-10: 2024.12 has NO mission-directive
+    title: Trace the loot        # API — stages compile to globalMessage
+    text: Kajaani 1 (deep system) was looted. Find what happened to the cluster shipment.
+    tracker: {station: kajaani}  # announcements; the tracker is wishful.
+  - when: "flags.ambush_cleared"
+    title: Recover and deliver
+    text: Tampere 1 is clear - collect the H200 nodes and bring the hardware to Lumina 1.
+    tracker: {station: lumina}
+  - when: "flags.h200_delivered and flags.b300_delivered"
+    title: Cluster rebuilt
+    tracker: none
+
+outcomes:
+  victory:
+    when: "flags.h200_delivered and flags.b300_delivered"
+    text: The research cluster is whole again. Lumina 1 owes you a drink.
+  defeat:                        # GAP-11: no fail() in 2024.12 — codegen
+    when: "not alive(player)"    # compiles defeat to victory(<enemy faction>)
+    text: The recovery fleet lost its only hull. The loot is gone with it.
+
+# ============ watchers the DSL cannot express (GAP-1/2/3/9) ==============
+# Raw Lua, verbatim into the generated file (scripts: passthrough). The
+# helper functions (gen_*) are generator-provided; the WATCHER LOGIC here
+# is what a `watch:`/`on_destroy:` section should own in v0.2.
+scripts:
+  ambush_watcher: |
+    function gen_watch_ambush(delta)
+        math.abs(0)
+        if not gen.flags.ambush_spawned then
+            local p = gen_player()
+            -- GAP-2: this wants to be `watch: when in_range(player, tampere, 24000)`
+            if p and in_range(p, E.tampere, 24000) then
+                gen.flags.ambush_spawned = true
+                gen_spawn("ambusher", 3, E.tampere.lc_x + 8000, E.tampere.lc_y)
+                gen_notify("Tampere 1: they're launching again - we can't move!", E.tampere)
+            end
+        elseif not gen.flags.ambush_cleared and gen_alive("ambusher") == 0 then
+            gen.flags.ambush_cleared = true
+            gen_notify("Tampere 1: the ships around us are gone. The area is clear - hail us.", E.tampere)
+        end
+    end
+  b300_watcher: |
+    function gen_watch_b300(delta)
+        math.abs(0)
+        -- GAP-3: LC hooks onDestruction per thief; the DSL has no lifecycle
+        -- hook, so we poll the archetype count and use the tracked death spot.
+        if not gen.flags.b300_dropped and gen_alive("raider") == 0
+           and gen_event_fired("thieves") then
+            gen.flags.b300_dropped = true
+            gen_spawn_item("b300", gen.lastkill_x, gen.lastkill_y)
+            gen_notify("Debris field by the gate: a GPU crate floats among the wreckage.")
+        end
+        -- GAP-9: no pickup semantics; proximity bookkeeping stand-in.
+        if gen.flags.b300_dropped and not gen_carried("b300") then
+            local p = gen_player()
+            local it = gen_item("b300")
+            if p and it and in_range(p, it, 6000) then
+                gen_take_item("b300", p)
+                gen_notify("Cargo bay: the B300 crate is aboard.")
+            end
+        end
+    end

@@ -129,9 +129,41 @@ plus `scripts:` — never a strained DSL file.
 - `options.*` in a page's reply conditions is opaque to the dead-end
   analysis → conservative warnings.
 - Only `fixed` layouts; generated-map support deferred.
-- The dead-end check is a conservative heuristic over flags × `credits`
-  thresholds × `has()` booleans (cap: 6 flags / 4 booleans); beyond the
-  cap it warns "cannot prove", never silently passes.
+- The dead-end check is a conservative heuristic over flags × ordered scalar
+  dimensions (`credits` thresholds, `n_alive()` counters — each expression is
+  one shared lo/hi variable, so `n_alive(x)==0` and `n_alive(x)>0` are
+  correctly exclusive) × `has()` booleans (cap: 6 flags / 4 scalar+bool);
+  beyond the cap it warns "cannot prove", never silently passes.
+
+## Gap harvest — lost-cluster-lite translation
+
+`dsl/samples/lost-cluster-lite.yaml` is a deliberate stress translation of
+scenario 40 into v0.1; where the schema ran out of road it fell down to
+`scripts:` instead of lying. Every gap below is annotated at its use site
+in the YAML, and the twin `scenarios/scenario_41_lostcluster_dsl.lua` is
+the hand-emitted generator output (validated: smoke + live tick driver
+`tools/autotest/gen41_autotest.lua`).
+
+| GAP | Missing feature | v0.2 proposal |
+|---|---|---|
+| 1 | Conditional/watch events — events are time-driven only | `watch:` entries: `when:` polled, `do:` |
+| 2 | Proximity semantics (approach ambush) | `in_range(a, b, u)` already in grammar; needs a `watch:` host |
+| 3 | Object lifecycle hooks (`on_destroy: [drop b300]`) | archetype-level `on_destroy:` actions; LC drops cargo per-ship via `onDestruction` |
+| 4 | Hidden stations (`hidden: nebula`, radar shadow until found) | station field `hidden: true` + generator found-watcher |
+| 5 | Behaviour specs (leash/patrol routes; `ai:` is vocabulary-only) | `leash: <anchor>, <u>` / `patrol: [...]` |
+| 6 | FTL default — stock templates ship without warp | `ships.*.ftl: warp` (already used in YAML; generator must apply `setWarpDrive` each tick, LC `ensure_ftl`) |
+| 7 | Ship comms (ship-to-ship transfers; comms exist only on stations) | `ships.player.comms:` allowed; needs per-entity handler install |
+| 8 | `mode: generation` | still deferred |
+| 9 | Item `initial:` placement + pickup semantics | `items.*.initial: {at: <obj>}`; pickup = proximity→cargo |
+| 10 | No mission-directive API in 2024.12 — stages compile to `globalMessage` announcements; trackers are wishful (check newer releases) |
+| 11 | No `fail()` — defeat compiles to `victory(<enemy faction>)` | `outcomes.defeat.faction:` option |
+
+Engine API corrections found while writing the twin (docs fixed here
+first): 2024.12 has **no** `setMissionDirective`, **no** `fail()`, and
+cargo is script bookkeeping + physical `Artifact` containers, not engine
+cargo slots (`teleportObject` does not exist). Defeat = `victory()` for
+the enemy faction.
+
 
 ## Verification workflow today
 

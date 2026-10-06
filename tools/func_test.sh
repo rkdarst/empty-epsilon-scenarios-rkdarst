@@ -52,8 +52,9 @@ while IFS= read -r d; do LD_PATH+="${LD_PATH:+:}$d"; done < <(find "$ROOT/vendor
 
 EEHOME="$(mktemp -d)"; trap 'rm -rf "$EEHOME" "$EEHOME.fifo"' EXIT
 mkdir -p "$EEHOME/.emptyepsilon/scripts" "$EEHOME/run"
-if [[ -f "$ROOT/tools/autotest/lc_autotest.lua" ]]; then
-    cat "$SCEN" "$ROOT/tools/autotest/lc_autotest.lua" > "$EEHOME/.emptyepsilon/scripts/$BASE"
+DRIVER="${AUTOTEST:-$ROOT/tools/autotest/lc_autotest.lua}"
+if [[ -f "$DRIVER" ]]; then
+    cat "$SCEN" "$DRIVER" > "$EEHOME/.emptyepsilon/scripts/$BASE"
 else
     cp "$SCEN" "$EEHOME/.emptyepsilon/scripts/"
 fi

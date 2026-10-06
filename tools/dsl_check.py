@@ -62,7 +62,11 @@ def check_expr(src, path, ctx):
     except SyntaxError as exc:
         ctx.err(f"{path}: unparsable expression {src!r}: {exc}")
         return None
+    arg_names = {a for fn, args in L.calls(tree)
+                 if fn in ("alive", "n_alive", "has") for a in args}
     for n in L.names_of(tree):
+        if n in arg_names:
+            continue    # ship/archetype/item refs; validated via calls() below
         if n not in ctx.known and n not in L.BUILTINS:
             ctx.err(f"{path}: unknown reference '{n}'")
     for p in sorted(L.attr_paths(tree)):
@@ -175,21 +179,55 @@ def only_flags(node):
     return names <= {"flags"} and roots <= {"flags"} and not called
 
 
+def scalar_key(node):
+    """Scalar expression that is an ordered dead-end dimension source
+    (credits | n_alive(x))."""
+    src = ast.unparse(node)
+    if src == "credits":
+        return src
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "n_alive"):
+        return src
+    return None
+
+
+def eval_scalar_cmp(node, key, val):
+    src = ast.unparse(node).replace(key, str(val))
+    try:
+        return bool(eval(compile(ast.parse(src, mode="eval"), "<de>", "eval"),
+                         {"__builtins__": {}}, {}))
+    except Exception:
+        return None
+
+
 NUM_SIDE = {ast.Gt: "hi", ast.GtE: "hi", ast.Lt: "lo", ast.LtE: "lo"}
 
 
 def classify_term(node):
-    """Dead-end analysis term: static (flags-only) | num (credits threshold)
-    | bool (free boolean unknown; key shared for same expressions) | const."""
+    """Dead-end analysis term: static (flags-only) | num (ordered scalar keyed
+    by expression: credits thresholds, n_alive counters) | bool (free boolean
+    unknown; key shared for same expressions) | const."""
     if isinstance(node, ast.Constant):
         return ("const", bool(node.value))
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
-        want = NUM_SIDE.get(type(node.ops[0]))
-        sides = [ast.unparse(node.left)] + [ast.unparse(c) for c in node.comparators]
-        if want and "credits" in sides:
-            if ast.unparse(node.left) != "credits":
-                want = "hi" if want == "lo" else "lo"
-            return ("num", want)
+        for side, lit, flip in ((node.left, node.comparators[0], False),
+                                (node.comparators[0], node.left, True)):
+            key = scalar_key(side)
+            if key is None:
+                continue
+            if isinstance(lit, ast.Constant) and isinstance(lit.value, int):
+                lo = eval_scalar_cmp(node, key, 0)
+                hi = eval_scalar_cmp(node, key, max(lit.value, 1))
+                if lo is not None and hi is not None:
+                    if lo == hi:
+                        return ("const", lo)
+                    return ("num", key, "lo" if lo else "hi")
+            else:  # non-constant bound (e.g. credits >= station.price):
+                want = NUM_SIDE.get(type(node.ops[0]))  # operator polarity
+                if want and flip:
+                    want = "hi" if want == "lo" else "lo"
+                if want:
+                    return ("num", key, want)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         return ("bool", ast.unparse(node), True)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not) \
@@ -210,7 +248,7 @@ def term_visible(t, fvals, numval, bvals):
         except Exception:
             return True
     if t[0] == "num":
-        return numval == t[1]
+        return numval[t[1]] == t[2]
     return bvals[t[1]] == t[2]
 
 
@@ -222,7 +260,7 @@ def deadend_check(page_path, replies, ctx):
         return
     if any("when" not in r and "once" not in r for r in replies):
         return
-    parsed, flagset, num_used, bool_used = [], set(), False, set()
+    parsed, flagset, numkeys, bool_used = [], set(), set(), set()
     for r in replies:
         src = r.get("when")
         if r.get("once"):
@@ -239,25 +277,25 @@ def deadend_check(page_path, replies, ctx):
                 flagset |= {p.split(".", 1)[1] for p in L.attr_paths(node)
                             if p.startswith("flags.")}
             elif t[0] == "num":
-                num_used = True
+                numkeys.add(t[1])
             elif t[0] == "bool":
                 bool_used.add(t[1])
             terms.append(t)
         parsed.append(terms)
     flagset = sorted(flagset)
     bools = sorted(bool_used)
-    if len(flagset) > 6 or len(bools) > 4:
+    numkeys = sorted(numkeys)
+    if len(flagset) > 6 or len(numkeys) + len(bools) > 4:
         ctx.warn(f"{page_path}: too many conditions to prove always-answerable")
         return
     dims = [(False, True)] * len(flagset)
-    if num_used:
-        dims.append(("lo", "hi"))
+    dims += [("lo", "hi")] * len(numkeys)
     dims += [(False, True)] * len(bools)
     for combo in itertools.product(*dims):
         fv = dict(zip(flagset, combo[:len(flagset)]))
         cut = len(flagset)
-        nv = combo[cut] if num_used else None
-        bv = dict(zip(bools, combo[cut + (1 if num_used else 0):]))
+        nv = dict(zip(numkeys, combo[cut:cut + len(numkeys)]))
+        bv = dict(zip(bools, combo[cut + len(numkeys):]))
         if all(not all(term_visible(t, fv, nv, bv) for t in ts) for ts in parsed):
             ctx.warn(f"{page_path}: all replies can be hidden at once "
                      "(comms dead-end); add an always-visible reply")

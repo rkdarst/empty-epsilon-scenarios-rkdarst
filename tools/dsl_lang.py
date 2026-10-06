@@ -69,7 +69,7 @@ _CMD_RES = (
     ("give",   r"^give\s+(\w+)\s+(\w+)$"),
     ("take",   r"^take\s+(\w+)\s+(\w+)$"),
     ("pay",    r"^pay\s+(\S+)\s+to\s+(\w+)$"),
-    ("spawn",  r"^spawn\s+(?:(\d+)\s+)?(\w+)\s+in\s+(\w+)(?:\s+at\s+(\w+))?$"),
+    ("spawn",  r"^spawn\s+(?:(\d+)\s+)?(\w+)\s+in\s+(\w+)(?:\s+at\s+([\w.]+))?$"),
     ("warp",   r"^warp\s+(\w+)\s+to\s+(\w+)$"),
 )
 

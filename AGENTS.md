@@ -39,6 +39,8 @@ an open-source multiplayer spaceship bridge simulator.
 | `tools/func_test.sh` | Boots a scenario headless *unpaused* and lets it run; if `tools/autotest/lc_autotest.lua` exists it is appended to a copy of the scenario as a timed assertion driver that walks the whole mission (exit 0 = all assertions passed). |
 | `tools/ee.def` | Apptainer recipe: Docker-Hub `debian:stable` base that **installs** the official EE deb (self-contained SDL2/GL stack). Build from the repo root. |
 | `tools/ee_run.sh` | Play/run the image graphically with the host `$HOME` hidden (`--contain --no-home`; only scenarios, `vendor/ee-state` and X11/DRI are exposed). |
+| `dsl/` | Mission DSL design sources — `dsl/samples/*.yaml` (schema v0.1, not executable; grammar in notes/05 + `tools/dsl_lang.py`). |
+| `tools/dsl_check.py` | Schema/cross-reference checker for DSL files (no codegen yet; needs PyYAML — `tools/get_pyyaml.sh` fetches it rootless into `vendor/pylibs`). |
 | `vendor/` | Downloaded game (git-ignored, ~300 MB). |
 | `notes/` | Deeper research notes; read before writing scenario code. |
 

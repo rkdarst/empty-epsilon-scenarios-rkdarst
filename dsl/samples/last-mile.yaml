@@ -1,0 +1,166 @@
+# Last Mile — demo mission for the EE mission DSL, schema v0.1.
+# Grammar / semantics / decisions: notes/05-mission-dsl-draft.md
+# Validate: python3 tools/dsl_check.py dsl/samples/last-mile.yaml
+# Not executable yet (codegen is Phase 2).
+
+version: 0.1
+
+meta:
+  name: Last Mile
+  description: >
+    DSL demo: hail two stations, buy and deliver an item, transit a
+    wormhole pair, survive a timed patrol.
+  type: Mission                  # scenario category (header Type:, note 01)
+  api: EE-2024.12.08             # pinned target API (representation picks)
+  setting:
+    mode: fixed                  # coordinates below are authoritative;
+                                 # v0's "generation + fixed coords" was a lie
+  options:
+    patrol:
+      type: select
+      description: Patrol strength at the far gate
+      values: [none, low, high]
+      default: low
+
+world:
+  systems: [home, far]
+  links:
+    - home <-> far
+  stars:
+    home: {class: A, has_life: true}
+    far:  {class: M, has_nebula: true}
+
+  wormholes:                     # ends are addressable objects gate.a/gate.b;
+    gate:                        # generator applies the 3.5U exit offset +
+      a: {system: home, position: [9000, 0]}    # re-entry guard (note 01)
+      b: {system: far, position: [-9000, 8000]}
+
+  ships:                         # entities: at_start + position. archetypes:
+    player:                      # at_start: false, no position, spawn targets
+      at_start: true
+      system: home
+      position: [0, 1200]
+      template: kestu
+      faction: friendly
+      player: true
+      credits: 80                # per-ship; `credits` in exprs = talking ship's
+    scout:
+      at_start: false            # archetype: spawn N, count with n_alive()
+      faction: hostile
+      ai: patrol
+
+  stations:
+    kajaani:
+      system: home
+      faction: independent
+      position: [300, 3000]
+      fields: {price: 50}        # declared per-object state (save-serialized)
+      comms: chip_shop
+    relay:
+      system: far
+      faction: friendly
+      position: [12000, 8000]
+      comms: depot
+
+items:
+  datachip:                      # honest representation (v0 hid it):
+    label: "Data chip"           # one teleport-able instance, beamed to/from
+    instance: one_of             # cargo; has() checks that instance (LC-style)
+    spawn_as: teleport_object    # (native cargo kinds are a fixed engine enum)
+
+flags:                           # blackboard: plain data only (note 04).
+  chip_bought: false             # scope defaults to world; per-ship state:
+  delivered: false               #   {default: false, scope: ship}
+
+# dialogs: page = text + replies ONLY; side effects live on replies; a
+# `say:` reply prints result text, then the greeting's replies (`then:`
+# overrides) — the structural fix for the note-01 result-wipe bug.
+# `once: <flag>` hides a reply after the first click (auto-declared flag).
+dialogs:
+  chip_shop:
+    greeting: intro
+    pages:
+      intro:
+        text: "Kajaani Relay here. Supply run's expensive out here, spacer."
+        replies:
+          - {text: "Who are you?", to: about}
+          - {text: "Anything for sale?", to: shop}
+          - {text: "Anything else?", to: shop, when: "flags.chip_bought"}
+          - text: "Wormhole's to the east. Mind the patrol."
+            to: news
+            once: told_news      # v1 sugar: one-time reply, no flag sprawl
+      about:
+        text: "Independent depot. Everything has a price."
+        replies:
+          - {text: Back, to: intro}
+      news:
+        text: "Unstable pair, works both ways. Far side is the relay — friendly."
+        replies:
+          - {text: "Copy.", to: intro}
+      shop:
+        text: "Military datachip, straight from the relay. Worth 200 there."
+        replies:
+          - text: "I'll take it. (50 credits)"
+            when: "not flags.chip_bought and credits >= kajaani.price"
+            do:
+              - "pay kajaani.price to kajaani"
+              - "give player datachip"
+              - "set flags.chip_bought true"
+              - "hint: Chip aboard. The relay in the far system pays 200."
+            say: "Pleasure. Wormhole east, follow it through."
+            then: {replies: intro}
+          - {when: "flags.chip_bought",
+             say: "You already bought it, remember?"}
+          - {when: "credits < kajaani.price",
+             say: "Come back solvent, spacer."}
+  depot:
+    greeting: intro
+    pages:
+      intro:
+        text: "Outbound relay."
+        replies:
+          - text: "Got that chip?"
+            when: "has(player, datachip)"
+            do:
+              - "take player datachip"
+              - "give player 200 credits"
+              - "set flags.delivered true"
+              - "victory: Delivery confirmed. Well paid, well flown."
+            say: "Payment transferred. Nice work, spacer."
+          - {when: "flags.delivered", say: "Pleasure doing business."}
+          - {when: "not has(player, datachip) and not flags.delivered",
+             say: "Come back when you have the chip."}
+
+# events: exactly one of after: / after_flag:; fire mode says what happens
+# when `when` is false at fire time (drop vs retry) — notes/05.
+events:
+  patrol_spawn:
+    after: 240
+    fire: once_when_ready
+    when: "not flags.delivered"
+    do:
+      - "if options.patrol == low: spawn 1 scout in far at relay"
+      - "if options.patrol == high: spawn 2 scout in far at relay"
+      - "gm: Pattern change: patrol outbound from the relay."
+
+# stages: evaluated top -> bottom, LAST matching `when` wins (default first).
+stages:
+  - when: "true"
+    title: Find a supplier
+    text: Kajaani depot (home system) may stock what the relay pays for.
+    tracker: {station: kajaani}
+  - when: "flags.chip_bought"
+    title: Cross the gate
+    text: Take the wormhole east; deliver the chip to the relay.
+    tracker: {object: gate.b}  # a real object — engine trackers take
+  - when: "flags.delivered"    # SpaceObjects, not systems (v1 fix)
+    title: Delivery complete
+    tracker: none
+
+outcomes:
+  victory:
+    when: "flags.delivered"
+    text: Delivery confirmed. Well paid, well flown.
+  defeat:
+    when: "not alive(player)"
+    text: Your ship was lost bringing the chip.

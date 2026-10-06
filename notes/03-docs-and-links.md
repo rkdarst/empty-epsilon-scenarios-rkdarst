@@ -29,6 +29,11 @@ grep -rhoP 'setTemplate\("\K[^"]+' vendor/EE-*/usr/local/share/emptyepsilon/scri
 
 # Find example usage of an API call in shipped scenarios:
 grep -rn "sendCommsMessage" vendor/EE-*/usr/local/share/emptyepsilon/scripts/scenario_*.lua
+
+# Re-fetch engine C++ source for behaviour verification (we don't keep a
+# local mirror; the .deb strips sources):
+git clone --depth 1 --filter=blob:none --sparse https://github.com/daid/EmptyEpsilon /tmp/ee-src
+git -C /tmp/ee-src sparse-checkout set src scripts
 ```
 
 The vendored `script_reference.html` is grep-able HTML, e.g.:

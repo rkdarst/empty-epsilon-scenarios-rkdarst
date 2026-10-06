@@ -82,6 +82,10 @@ in shipped scenarios: `random(a, b)`, `allowNewPlayerShips(false)`,
 
 ## Mission-state pattern (from `scenario_05_beacon.lua`)
 
+For the broader picture — execution model, state-storage cells, and the
+three driving idioms — see [04-state-and-driving.md](04-state-and-driving.md).
+
+
 Rather than many timers, shipped missions keep a state function pointer:
 
 ```lua

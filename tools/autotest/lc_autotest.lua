@@ -13,6 +13,48 @@ function lc_check(cond, msg)
     end
 end
 
+-- Dialog walker: stubs the two comms globals and drives the SAME functions
+-- the engine's CommsScriptInterface drives (page function to open, reply
+-- callback to click). The engine clears all replies before running a reply
+-- callback and every setCommsMessage inside it REPLACES the text, so a well
+-- behaved page produces EXACTLY ONE message; two means a menu renderer
+-- clobbered the action result and the player sees nothing happen.
+lc_dlg = { msgs = {}, replies = {} }
+local lc_real_set, lc_real_add = setCommsMessage, addCommsReply
+
+local function lc_dlg_capture()
+    lc_dlg.msgs, lc_dlg.replies = {}, {}
+    setCommsMessage = function(m) table.insert(lc_dlg.msgs, tostring(m)) end
+    addCommsReply = function(label, f) table.insert(lc_dlg.replies, { label = label, fn = f }) end
+end
+
+local function lc_dlg_restore()
+    setCommsMessage, addCommsReply = lc_real_set, lc_real_add
+end
+
+function lc_dlg_open(fn, t, src)
+    lc_dlg_capture()
+    local ok, err = pcall(fn, t, src)
+    lc_dlg_restore()
+    lc_check(ok, "dialog opens without error: " .. (ok and tostring(t) or tostring(err)))
+    return lc_dlg
+end
+
+-- Click reply `idx` the way commChannelMessage() does: replies cleared,
+-- callback called with (ship, station). Returns messages rendered.
+function lc_dlg_click(d, idx, t, src)
+    local reply = d.replies[idx]   -- grab BEFORE the capture clears the list
+    if reply == nil then
+        lc_check(false, "dialog has a reply #" .. idx)
+        return {}
+    end
+    lc_dlg_capture()
+    local ok, err = pcall(reply.fn, src, t)
+    lc_dlg_restore()
+    lc_check(ok, "reply click runs without error: " .. tostring(err or reply.label))
+    return d.msgs
+end
+
 steps = {
     { t = 3, f = function()
         lc_check(phase == 1, "boots into phase 1")
@@ -36,6 +78,67 @@ steps = {
         end
         lc_check(bad == 0, "no ambient mine inside a station keep-out ring")
         lc_check(probe_watch(), "every active player ship is watched (cargo-eject + transfer comms)")
+        -- Wormhole pair: exits must land OUTSIDE the far mouth's 2.5U pull
+        -- radius or the engine perma-loops the traveler (wormHole.cpp has no
+        -- re-entry cooldown). Also exercise the script-side bounce guard.
+        lc_check(not AMBIENT.wormholes or #ambient_wh == 2, "wormhole pair seeded")
+        local far = true
+        for _, wh in ipairs(ambient_wh) do
+            local tx, ty = wh.obj:getTargetPosition()
+            local px, py = wh.partner:getPosition()
+            if (tx - px) ^ 2 + (ty - py) ^ 2 <= 3000 ^ 2 then far = false end
+        end
+        lc_check(#ambient_wh ~= 2 or far, "wormhole exits sit outside the far mouth's pull radius")
+        if #ambient_wh == 2 then
+            local p = active_players()[1]
+            local x0, y0 = p:getPosition()
+            local wh = ambient_wh[1]
+            wh_transit(wh, p)   -- fresh transit must NOT override the drop
+            local x1, y1 = p:getPosition()
+            lc_check(x0 == x1 and y0 == y1, "first wormhole transit leaves the drop position alone")
+            local tx, ty = wh.obj:getTargetPosition()
+            p:setPosition(tx + wh.dirx * 400, ty + wh.diry * 400)   -- worst-case engine drop
+            wh_transit(wh, p)   -- immediate re-entry attempt
+            local px, py = wh.partner:getPosition()
+            local x2, y2 = p:getPosition()
+            lc_check((x2 - px) ^ 2 + (y2 - py) ^ 2 > 4500 ^ 2,
+                "wormhole re-entry within cooldown is pushed clear of the far mouth")
+            p:setPosition(x0, y0)
+        end
+    end },
+    { t = 5.2, f = function()
+        -- Dialog-tree regression walk (before anyone nears Tampere): stub
+        -- the comms globals, click every choice on every page. Exactly ONE
+        -- message per rendered page = the overwrite bug cannot return.
+        local p = active_players()[1]
+        local function walk(fn, st, min_replies, tag)
+            local d = lc_dlg_open(fn, st, p)
+            lc_check(#d.msgs == 1, tag .. ": menu page renders one message")
+            lc_check(#d.replies >= min_replies, tag .. ": menu offers its choices")
+            return d
+        end
+        local d = walk(commsLumina, stations.lumina, 2, "Lumina 1")
+        lc_dlg_click(d, 1, stations.lumina, p)
+        lc_check(#lc_dlg.msgs == 1 and #lc_dlg.replies >= 2, "Lumina status page: message + menu stays live")
+        d = walk(commsKajaani, stations.kajaani, 2, "Kajaani 1")
+        lc_dlg_click(d, 1, stations.kajaani, p)
+        lc_check(#lc_dlg.msgs == 1 and known.tampere, "Kajaani intel page: one message, hints unlocked")
+        lc_dlg_click(d, 2, stations.kajaani, p)
+        lc_check(#lc_dlg.msgs == 1 and #lc_dlg.replies == 0, "Kajaani goodbye is a clean terminal page")
+        d = walk(commsTampere, stations.tampere, 2, "Tampere 1")
+        lc_dlg_click(d, 2, stations.tampere, p)   -- LUT question from far away
+        lc_check(#lc_dlg.msgs == 1 and known.lut ~= true, "Tampere refuses the LUT coordinates at range")
+        lc_dlg_click(d, 1, stations.tampere, p)   -- collect H200 via the dialog
+        lc_check(#lc_dlg.msgs == 1 and parts["H200 GPU nodes"].obj:isValid(),
+            "Tampere collect reply shows its result AND spawns the container")
+        d = walk(commsTurku, stations.turku, 1, "Turku 1")
+        lc_dlg_click(d, 1, stations.turku, p)
+        lc_check(#lc_dlg.msgs == 1 and #lc_dlg.replies == 1, "Turku tip page: message keeps its choice")
+        d = walk(commsLUT, stations.lut, 1, "LUT 1 (friendly)")
+        lc_dlg_click(d, 1, stations.lut, p)
+        lc_check(#lc_dlg.msgs == 1, "LUT friendly page click renders one message")
+        d = lc_dlg_open(commsPlayerShip, p, p)
+        lc_check(#d.msgs == 1 and #d.replies == 0, "self-hail of player ship is a clean one-liner")
     end },
     { t = 6, f = function() probe_warp_sector("H5") end },
     { t = 14, f = function()
@@ -92,18 +195,25 @@ steps = {
         probe_warp_sector("H5")   -- back to calm space while phase 1 ends
     end },
     { t = 32, f = function()
-        -- Phase-2 freighter comms: stop action + ranged transfer gate.
+        -- Phase-2 freighter comms through the dialog tree: stop option,
+        -- then a ranged transfer attempt that must be refused.
         local tr = nil
         for _, t in ipairs(transports) do
             if t:isValid() and t.lc_book and not parts[t.lc_book].given and not parts[t.lc_book].delivered then tr = t break end
         end
         lc_check(tr ~= nil, "a playbook freighter is still available")
         if tr then
-            act_stop_transport(tr)
-            lc_check(tr.lc_stopped == true, "hail can stop a transport")
-            local msg, ok = act_transfer_book(tr, active_players()[1])
-            lc_check(ok == false, "playbook transfer refused at range")
+            local p = active_players()[1]
             local tx, ty = tr:getPosition()
+            probe_warp_to(tx - U(20), ty)   -- deterministic "at range"
+            local d = lc_dlg_open(commsTransport, tr, p)
+            lc_check(#d.msgs == 1 and #d.replies == 1, "unstopped freighter page offers the stop option")
+            lc_dlg_click(d, 1, tr, p)
+            lc_check(tr.lc_stopped == true and #lc_dlg.msgs == 1 and #lc_dlg.replies == 1,
+                "dialog stop action works and immediately offers the transfer")
+            lc_dlg_click(d, 1, tr, p)   -- transfer attempt from out of range
+            lc_check(parts[tr.lc_book].given ~= true and #lc_dlg.replies == 1,
+                "playbook transfer refused at range, choice re-offered")
             probe_warp_to(tx + U(1), ty)
             lc_autotest_tr = tr
         end
@@ -111,8 +221,13 @@ steps = {
     { t = 33, f = function()
         local tr = lc_autotest_tr
         if tr and tr:isValid() then
-            local msg, ok = act_transfer_book(tr, active_players()[1])
-            lc_check(ok == true, "playbook transfer succeeds alongside the freighter")
+            local p = active_players()[1]
+            local d = lc_dlg_open(commsTransport, tr, p)
+            lc_dlg_click(d, 1, tr, p)
+            lc_check(parts[tr.lc_book].given == true,
+                "playbook transfer succeeds alongside the freighter")
+            lc_check(#lc_dlg.msgs == 1 and #lc_dlg.replies == 0,
+                "transfer result page renders one message and ends cleanly")
             lc_check(parts[tr.lc_book].obj:isValid(), "playbook container appears next to the freighter")
         else
             lc_check(false, "playbook transfer succeeds alongside the freighter")

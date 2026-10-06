@@ -165,10 +165,15 @@ state (every generator scales from it):
   by 4 mines (salvage hazard).
 - **Traffic** — `traders` extra Independent freighters roaming the box
   (Neutral to both sides, like the init shuttles).
-- **Wormhole pair** — `wormholes = true` links two far corners of the
-  box (`setTargetPosition`), 12u+ from any station: shortcuts turn the
-  empty middle into a lived-in map. No black hole: it would eat any
-  station within 5U.
+- **Wormhole pair** — `wormholes = true` puts two mouths in far corners
+  of the box, 12u+ from any station. The engine teleports anything that
+  reaches a mouth's center to `setTargetPosition` ±0.5u with *no
+  re-entry cooldown*, so pointing each mouth at the other's center would
+  perma-loop the traveler: instead each exit sits **3.5U beyond the
+  partner mouth**, outside its 2.5U gravity pull. An `onTeleportation`
+  guard additionally ejects any ship that transits twice within 15 s to
+  2U further out (speedy exits aimed at the far mouth can't bounce).
+  No black hole: it would eat any station within 5U.
 
 Keep-outs: nothing ambient spawns within 5u of a station (8u around
 Lumina 1, so the home radar stays clean); mines demand 8u. All counts

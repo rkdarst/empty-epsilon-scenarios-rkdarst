@@ -156,4 +156,34 @@ code you can paste into `init()`.
   late joiners / GM respawns, guarded by a `ship.lc_watched` flag —
   `init()` only sees the first player ship, and an unhooked respawn would
   silently keep (or lose) script-tracked mission cargo.
+- **Clicking a reply clears all replies, then runs the callback, and
+  every `setCommsMessage` inside a callback REPLACES the text**
+  (`commsScriptInterface.cpp`, 2024.12). A reply callback that renders an
+  action result and then re-invokes the menu renderer therefore shows
+  ONLY the menu — the result is silently wiped and the click looks dead.
+  Structure dialogs as page function (sets the text once) + a separate
+  `*_replies` function (only adds choices); result pages call
+  `setCommsMessage(result)` + `*_replies`, never the page function.
+
+## Wormhole physics (verified from `wormHole.cpp` @ EE-2024.12.08)
+
+- A mouth **drags every weighted object within 2.5U** toward its center
+  (as a velocity: `v += dir * R²·50/d²`), including stations and
+  containers; AI pathfinding avoids mouths by 2U on its own.
+- Anything reaching **within ~0.18U of the center is teleported** to
+  `setTargetPosition()` **± 500u random spread**; exit velocity is kept.
+- There is **no re-entry cooldown** (upstream `// TODO: escaping is
+  impossible`). Pointing two wormholes at **each other's centers is a
+  designed infinite ping-pong**: the exit spread lands the traveler
+  inside the far mouth's pull zone. Aim each `setTargetPosition` at a
+  point **>= 3U beyond** the partner (or at a plain spot in space, as
+  the official examples do).
+- `WormHole:onTeleportation(function(wormhole, obj)` IS available in
+  2024.12 (in the reference; not in some older examples) — it fires
+  *after* the engine places the traveler, so the script can
+  `obj:setPosition()` to override the drop: the only way to implement a
+  per-ship transit cooldown. It is a `ScriptSimpleCallback` — the
+  callback needs the `math.abs(0)` upvalue trick like `addCommsReply`.
+- Wormholes are plain `SpaceObject`s: `isValid()`, `destroy()`, and
+  custom script fields (`wh.lc_something`) all work.
 

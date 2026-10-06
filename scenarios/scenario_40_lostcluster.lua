@@ -163,6 +163,8 @@ AMBIENT = {
 ambient_stats = { nebulae = 0, dust = 0, rocks = 0, mines = 0, wrecks = 0, traders = 0, wormholes = 0 }
 ambient_mines = {}
 ambient_box = {}
+ambient_wh = {}        -- wormhole mouths: { obj=, partner=, dirx=, diry= } (autotest inspects)
+lc_wh_transits = {}    -- recent transits: { obj=, t=clock }, for the re-entry guard
 
 function part_delivered_count(names)
     local n = 0
@@ -423,11 +425,65 @@ function ambient_wormholes()
     if ax == nil then return end
     local bx, by = ambient_box.x1 - (ax - ambient_box.x0), ambient_box.y1 - (ay - ambient_box.y0)
     if not ambient_clear(bx, by, 12) then return end
+    local dx, dy = bx - ax, by - ay
+    local dist = math.sqrt(dx * dx + dy * dy)
+    if dist < U(10) then return end   -- need room for the offset exits (see below)
+    -- Engine physics (wormHole.cpp 2024.12): a mouth drags every weighted
+    -- object within 2.5U toward its center and teleports anything that gets
+    -- within ~0.18U to target_position +/- 0.5U, with NO re-entry cooldown
+    -- (upstream TODO: "escaping is impossible"). Targeting the partner
+    -- mouth's CENTRE therefore perma-loops: you drop 0.5U inside its pull
+    -- zone and are sucked straight back. So each exit sits 3.5U BEYOND the
+    -- partner along the pair axis - outside the 2.5U pull radius (residual
+    -- drift at the worst exit spread is ~35 m/s, easily outthrust).
+    local ex, ey = bx + dx / dist * U(3.5), by + dy / dist * U(3.5)
+    local fx, fy = ax - dx / dist * U(3.5), ay - dy / dist * U(3.5)
+    if not ambient_clear(ex, ey, 8) or not ambient_clear(fx, fy, 8) then return end
     local a = WormHole():setPosition(ax, ay)
     local b = WormHole():setPosition(bx, by)
-    a:setTargetPosition(bx, by)
-    b:setTargetPosition(ax, ay)
+    a:setTargetPosition(ex, ey)
+    b:setTargetPosition(fx, fy)
+    ambient_wh = { { obj = a, partner = b, dirx = dx / dist, diry = dy / dist },
+                   { obj = b, partner = a, dirx = -dx / dist, diry = -dy / dist } }
+    for _, wh in ipairs(ambient_wh) do
+        local w = wh
+        w.obj:onTeleportation(function(this_wormhole, teleported_object)
+            math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+            wh_transit(w, teleported_object)
+        end)
+    end
     ambient_stats.wormholes = 2
+    print("LC: wormhole pair seeded, exits offset 3.5U beyond the far mouths")
+end
+
+-- Re-entry guard (belt & braces under the offset exits): the engine drops
+-- the traveler at target +/- 500u and does not zero its velocity, so a ship
+-- exiting straight INTO the far mouth at speed can fall back in. If the same
+-- object transits twice within 15 s, override the drop to 2U further out.
+function wh_transit(entry, obj)
+    local e = nil
+    for _, w in ipairs(lc_wh_transits) do
+        if w.obj == obj then e = w break end
+    end
+    local again = e ~= nil and (clock - e.t) < 15
+    if e then
+        e.t = clock
+    else
+        if #lc_wh_transits > 64 then
+            local fresh = {}
+            for _, w in ipairs(lc_wh_transits) do
+                if w.obj:isValid() and clock - w.t < 60 then table.insert(fresh, w) end
+            end
+            lc_wh_transits = fresh
+        end
+        table.insert(lc_wh_transits, { obj = obj, t = clock })
+    end
+    if again and obj:isValid() then
+        local tx, ty = entry.obj:getTargetPosition()
+        pcall(obj.setPosition, obj, tx + entry.dirx * U(2), ty + entry.diry * U(2))
+        local okc, cs = pcall(function() return obj:getCallSign() end)
+        print("LC: wormhole re-entry suppressed for " .. tostring(okc and cs or "an object"))
+    end
 end
 
 function seed_ambient()
@@ -741,7 +797,16 @@ function act_transfer_part(target, receiver, name)
 end
 
 -- Comms handler installed on every player ship by watch_player().
-function commsPlayerShip(t, src)
+--
+-- Engine comms semantics (commsScriptInterface.cpp): clicking a reply clears
+-- ALL replies, then runs the callback, and inside a callback every
+-- setCommsMessage REPLACES the displayed text. So a reply callback must
+-- render exactly ONE message: re-rendering a whole menu page after the
+-- result text wipes the result and the click looks like a no-op. Hence the
+-- split of every dialog into a page function (sets the text) and a
+-- *_replies function (only adds choices): result pages call
+-- setCommsMessage(result) + *_replies, never the page function.
+function commsPlayerShip_offered(t, src)
     local offered = {}
     if src ~= t then
         for _, list in ipairs({ PART_NAMES, BOOK_NAMES }) do
@@ -753,22 +818,31 @@ function commsPlayerShip(t, src)
             end
         end
     end
+    return offered
+end
+
+function commsPlayerShip(t, src)
+    local offered = commsPlayerShip_offered(t, src)
     if #offered == 0 then
         setCommsMessage("Ship " .. t:getCallSign() .. " here. Nothing to transfer from us.")
         return true
     end
     setCommsMessage("Ship " .. t:getCallSign() .. " here. We are carrying: " .. table.concat(offered, ", ") ..
         ". Pull alongside (within 3u), stop, and we can transfer it to you.")
-    for _, n in ipairs(offered) do
+    commsPlayerShip_replies(t, src)
+    return true
+end
+
+function commsPlayerShip_replies(t, src)
+    for _, n in ipairs(commsPlayerShip_offered(t, src)) do
         addCommsReply("We would like to transfer the " .. n .. " to us.", function(comms_source, comms_target)
             math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
             local who = comms_source or src
             setCommsMessage(act_transfer_part(t, who, n))
-            commsPlayerShip(t, who)
+            commsPlayerShip_replies(t, who)   -- keep the result visible, re-offer remaining cargo
             return true
         end)
     end
-    return true
 end
 
 function commsLumina(t, src)
@@ -805,6 +879,11 @@ function commsKajaani(t, src)
     setCommsMessage([[Kajaani 1. Our stores were looted - the whole supercomputer shipment is gone.
 We were supposed to ship the first batch to Lumina 1. Whoever did this also hit Tampere 1 and Turku 1;
 those two went dark with their stations, moving out of long-range radar.]])
+    commsKajaani_replies(t, src)
+    return true
+end
+
+function commsKajaani_replies(t, src)
     addCommsReply("Where are Tampere 1 and Turku 1?", function(comms_source, comms_target)
         math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         known.tampere = true
@@ -813,7 +892,7 @@ those two went dark with their stations, moving out of long-range radar.]])
             [[ and Turku 1 near sector ]] .. hint_sector(stations.turku) ..
             [[. The reply beacon drifts, so they can be up to 50u from those sector squares.
 If you find out anything about LUT 1, they were moving AMD nodes - but that is all we know.]])
-        commsKajaani(t, comms_source or src)
+        commsKajaani_replies(t, comms_source or src)   -- replies only: the intel stays visible
         return true
     end)
     addCommsReply("We will look around.", function(comms_source, comms_target)
@@ -821,7 +900,6 @@ If you find out anything about LUT 1, they were moving AMD nodes - but that is a
         setCommsMessage("Good luck out there.")
         return true
     end)
-    return true
 end
 
 function commsTampere(t, src)
@@ -831,10 +909,16 @@ function commsTampere(t, src)
     end
     setCommsMessage([[Tampere 1 here. We still have the H200 GPU nodes, hidden in the nebula around us.
 The B300 GPU nodes were taken by Kraylor ships - our trackers say they headed for sector C10.]])
+    commsTampere_replies(t, src)
+    return true
+end
+
+function commsTampere_replies(t, src)
+    if tampere_state == "ambush" then return end
     addCommsReply("Collect the H200 GPU nodes.", function(comms_source, comms_target)
         math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         setCommsMessage(act_collect_tampere(t))
-        commsTampere(t, comms_source or src)
+        commsTampere_replies(t, comms_source or src)   -- replies only: the result stays visible
         return true
     end)
     addCommsReply("What about LUT 1?", function(comms_source, comms_target)
@@ -850,10 +934,9 @@ The B300 GPU nodes were taken by Kraylor ships - our trackers say they headed fo
         else
             setCommsMessage("That information is confidential. Approach within 10 units of us and we will talk.")
         end
-        commsTampere(t, comms_source or src)
+        commsTampere_replies(t, comms_source or src)   -- replies only: the answer stays visible
         return true
     end)
-    return true
 end
 
 function deliver_to_lumina(ship)
@@ -904,13 +987,17 @@ function commsTurku(t, src)
 fileserver in cargo containers across seven nebulas around us - our courier ship made it that far before
 it was shot down. The containers only say what is inside once you are right next to them; the Kraylor
 left junk decoys behind. LUT 1 has the AMD nodes, if they are still ours to ask.]])
+    commsTurku_replies(t, src)
+    return true
+end
+
+function commsTurku_replies(t, src)
     addCommsReply("Anything else?", function(comms_source, comms_target)
         math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         setCommsMessage("The nebula shadows hide things at long range. Fly into each one and sweep with short-range sensors.")
-        commsTurku(t, comms_source or src)
+        commsTurku_replies(t, comms_source or src)   -- replies only: the tip stays visible
         return true
     end)
-    return true
 end
 
 function commsLUT(t, src)
@@ -920,22 +1007,30 @@ function commsLUT(t, src)
     end
     if lut_state == "friendly" then
         setCommsMessage([[LUT 1, operations. The AMD compute node shipment is still in our bay. Is there a problem?]])
+    else
+        setCommsMessage([[LUT 1 is back under our control - and that was no accident; they were already inside
+when we opened the doors. The AMD compute nodes are aboard; we are floating the container out to you.]])
+    end
+    commsLUT_replies(t, src)
+    return true
+end
+
+function commsLUT_replies(t, src)
+    if lut_state == "hostile" then return end
+    if lut_state == "friendly" then
         addCommsReply("We will check the perimeter.", function(comms_source, comms_target)
             math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
             setCommsMessage("Understood. Sensors show Kraylor signatures on the station - be careful.")
             return true
         end)
-        return true
+        return
     end
-    setCommsMessage([[LUT 1 is back under our control - and that was no accident; they were already inside
-when we opened the doors. The AMD compute nodes are aboard; we are floating the container out to you.]])
     addCommsReply("Collect the AMD compute nodes.", function(comms_source, comms_target)
         math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
         setCommsMessage(act_collect_lut(t))
-        commsLUT(t, comms_source or src)
+        commsLUT_replies(t, comms_source or src)   -- replies only: the result stays visible
         return true
     end)
-    return true
 end
 
 function commsTransport(t, src)
@@ -949,24 +1044,33 @@ function commsTransport(t, src)
     end
     if not t.lc_stopped then
         setCommsMessage("Freighter " .. t:getCallSign() .. " here, busy on a run.")
+    else
+        setCommsMessage("Freighter " .. t:getCallSign() .. " is stopped. We were told to hand over one Ansible Playbook to whoever came looking.")
+    end
+    commsTransport_replies(t, src)
+    return true
+end
+
+function commsTransport_replies(t, src)
+    if t.lc_book == nil then return end
+    if parts[t.lc_book] and parts[t.lc_book].given then return end
+    if not t.lc_stopped then
         addCommsReply("Please stop for a data transfer.", function(comms_source, comms_target)
             math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
             setCommsMessage(act_stop_transport(t))
-            commsTransport(t, comms_source or src)
+            commsTransport_replies(t, comms_source or src)   -- offers the transfer straight away
             return true
         end)
-        return true
+    else
+        addCommsReply("Please transfer the Ansible Playbook to us.", function(comms_source, comms_target)
+            math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+            local who = comms_source or src
+            local msg, ok = act_transfer_book(t, who)
+            setCommsMessage(msg)
+            commsTransport_replies(t, who)   -- refused: re-offers; accepted: page ends
+            return true
+        end)
     end
-    setCommsMessage("Freighter " .. t:getCallSign() .. " is stopped. We were told to hand over one Ansible Playbook to whoever came looking.")
-    addCommsReply("Please transfer the Ansible Playbook to us.", function(comms_source, comms_target)
-        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
-        local who = comms_source or src
-        local msg, ok = act_transfer_book(t, who)
-        setCommsMessage(msg)
-        commsTransport(t, who)
-        return true
-    end)
-    return true
 end
 
 -- ========================= event callbacks =========================

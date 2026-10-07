@@ -7,6 +7,20 @@ This scenario is suitable for any number of player ships.
 Units here are in game units, where a sector is 20u across, and the
 typical scanner range is 5u.
 
+## Difficulty settings
+
+The scenario browser shows a `Difficulty` picker for this scenario
+(`Setting[Difficulty]` header lines, read with `getScenarioSetting`):
+
+- **Normal** (default): the balance described throughout this document.
+- **Story**: the same mission, but every player ship's beam weapons are
+  re-wielded to 5000 damage per hit, so anything they hit is destroyed
+  in one volley and a story-focused crew can never get stuck on a
+  fight.  Turret and missile damage stay at normal values — 2024.12
+  exposes no per-turret damage API.  The buff runs inside
+  `watch_player()`, so late joiners and GM-spawned replacements get it
+  too.
+
 ## Scenario script
 
 ### Phase 1
@@ -49,10 +63,12 @@ When approaching station LUT 1, the station suddenly turns into an
 enemy station and 3x the current total number of player ships appear.
 These ships stay around the station (even as the player ships retreat),
 and it is expected that the player ships need to group up and attack all
-together.  Each time a player approaches within 20u alone (not all
-player ships within 30u of the station), the enemy will hail the player
-ship and taunt them “Alone you are weak and we will be victorious!  Come
-back with more people, or stay away“.  LUT 1 itself appears as hostile
+together.  Each time a player approaches within 20u while the rest of
+the fleet is elsewhere (no other player ship within 30u), the enemy
+will hail the player ship and taunt them “Alone you are weak and we will be victorious!  Come
+back with more people, or stay away“.  (The taunt only fires when the
+group actually has more than one ship in play: a one-ship crew never
+hears it — “come back with more” would be an empty promise.)  LUT 1 itself appears as hostile
 but doesn’t attack the player.  The enemy ships nearby don’t leave LUT 1
 but stay within a sector of it.  Once the ships are gone, station LUT 1
 can be hailed and then it will turn friendly again and they will provide
@@ -270,8 +286,9 @@ civilian freighter = Atlantis.
 - Phase 2: 10 transports shuttle between the 5 stations; exactly 3 of
   them (random) carry one playbook each.
 - LUT taunt: fires when a player ship is within 20u of LUT 1 while no
-  other player ship is within 30u; re-arms once that ship has been >40u
-  away again.
+  other player ship is within 30u, and only if at least two player
+  ships are in play (a lone ship is never taunted); re-arms once that
+  ship has been >40u away again.
 - Phase 3 trigger: after the third playbook is delivered, the first time
   any player ship is >=40u from Lumina 1; the hail is immediate, the
   invasion warps in 3 minutes later.
@@ -298,6 +315,19 @@ civilian freighter = Atlantis.
   player is inside another comms dialog, so nothing is dropped.
 - Hidden stations = invisible to long-range radar until found (a player
   within 40u, or revealed by the hint chain).
+- Nebula *display* is asymmetric by engine design, and seeing a nebula
+  only on the GM screen is expected, not a bug: the GM view runs with
+  `NoFogOfWar` ("everything is deemed visible", `radarView.cpp`), the
+  Relay sector map uses `FriendlysShortRangeFogOfWar` (it only shows
+  what friendly short-range sensors currently cover), and the Science
+  radar uses `NebulaFogOfWar`, whose fog is drawn from the nebula list
+  *replicated to that client* — i.e. nebulae near that player's ship
+  (the engine streams objects per client through the
+  `multiplayer_significant_range` parameter of the `SpaceObject`
+  constructor; the GM client receives everything).  Nebulae far from
+  any ship therefore appear on station radars only as someone gets
+  close; the same replication + fog model is what makes the hidden
+  stations' radar shadow work in the first place.
 - "Cannot be destroyed" = respawn guards: protected ships/objects that
   are destroyed re-dock or re-drop on the spot, so the mission can never
   become unwinnable.

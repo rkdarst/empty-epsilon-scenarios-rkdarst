@@ -6,6 +6,9 @@
 --- them were handed an Ansible Playbook. Phase 3: the enemy is coming for Lumina 1.
 -- Author: scenario-dev (implements scenarios/scenario_40_lostcluster.md)
 -- Type: Mission
+-- Setting[Difficulty]: Mission difficulty.
+-- Difficulty[Normal|Default]: Standard balance.
+-- Difficulty[Story]: Story mode: player beams one-shot anything they hit.
 
 -- ========================= scale & helpers =========================
 -- 1 in-game displayed unit == 1000 script units. Sector grid is the engine
@@ -60,6 +63,31 @@ function ensure_ftl(players)
             t:setWarpSpeed(WARP_SPEED)
         end
     end
+end
+
+-- Story mode: player beams get one-shot damage. Applied by watch_player(),
+-- which update() re-runs for late joiners and GM respawns, so every hull
+-- that can fire is covered. Turrets/missiles keep normal damage (2024.12
+-- exposes no per-turret damage API).
+LC_DIFFICULTY = getScenarioSetting("Difficulty")
+if LC_DIFFICULTY == nil or LC_DIFFICULTY == "" then LC_DIFFICULTY = "Normal" end
+STORY_MODE = LC_DIFFICULTY == "Story"
+STORY_BEAM_DAMAGE = 5000
+
+function story_buff(p)
+    local n = 0
+    for i = 0, 15 do
+        local ok, arc = pcall(p.getBeamWeaponArc, p, i)
+        if ok and arc and arc > 0 then
+            local _, dir = pcall(p.getBeamWeaponDirection, p, i)
+            local _, rng = pcall(p.getBeamWeaponRange, p, i)
+            local _, cyc = pcall(p.getBeamWeaponCycleTime, p, i)
+            if pcall(p.setBeamWeapon, p, i, arc, dir, rng, cyc, STORY_BEAM_DAMAGE) then
+                n = n + 1
+            end
+        end
+    end
+    print("LC: story buff on " .. (p:getCallSign() or "?") .. ": " .. n .. " beam(s) set to damage " .. STORY_BEAM_DAMAGE)
 end
 
 function all_dead(group)
@@ -577,7 +605,7 @@ contents only once you fly close enough to read the shipping label.]])
     -- traffic, a wormhole pair) everywhere the mission does not live.
     seed_ambient()
 
-    print("LC: init complete, phase=" .. phase)
+    print("LC: init complete, phase=" .. phase .. " difficulty=" .. LC_DIFFICULTY)
 end
 
 function mk_station(name, tmpl, fac, x, y, fn)
@@ -602,6 +630,9 @@ end
 -- lose) mission cargo.
 function watch_player(p)
     p.lc_watched = true
+    if STORY_MODE then
+        story_buff(p)
+    end
     p:onDestruction(function(ship, instigator)
         local dropped = false
         for name, info in pairs(parts) do
@@ -1191,7 +1222,10 @@ container to read the labels - the Kraylor scattered junk decoys among them.]], 
                 for _, q in ipairs(players) do
                     if d2(q, stations.lut) < U(30) ^ 2 then with = with + 1 end
                 end
-                if with <= 1 then
+                -- The "come back with more" taunt only makes sense when
+                -- there ARE more ships to come back with: in a one-ship
+                -- game it is pure noise, so it only fires for split groups.
+                if with <= 1 and #players >= 2 then
                     taunt_armed[p] = false
                     stations.lut:sendCommsMessage(p, [[Alone you are weak and we will be victorious!
 Come back with more people, or stay away.]])

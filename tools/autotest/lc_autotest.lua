@@ -152,7 +152,7 @@ steps = {
     { t = 26, f = function()
         lc_check(lut_state == "hostile", "LUT turns hostile on approach")
         lc_check(#groups.lut >= 2, "LUT garrison scales with players")
-        lc_check(taunt_armed[active_players()[1]] == false, "solo player gets taunted at LUT")
+        lc_check(taunt_armed[active_players()[1]] ~= false, "one-ship group is not taunted at LUT")
         probe_kill_group("lut")
     end },
     { t = 30, f = function()

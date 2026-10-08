@@ -73,6 +73,60 @@ end
 Self-healing: if a GM destroys/respawns something, the predicate
 re-evaluates and reality wins.
 
+#### Destruction hooks: damage-only (engine-verified)
+
+`onDestruction(cb)` fires ONLY when the hull dies by *damage*
+(`ShipTemplateBasedObject::takeHullDamage` -> `on_destruction.call`);
+`obj:destroy()` from a script removes the object through
+`SpaceObject::destroy()` and silently skips the hook, and the 2024.12
+script API has no damage call (`hurt` does not exist). Consequences:
+
+- scenario logic wired to `onDestruction` (part drops, guard respawns,
+  freighter spills) is unreachable by scripted cleanup - only combat
+  kills, mines and collisions trigger it;
+- autotests that must exercise those hooks stage *real combat*: the
+  `lc_autotest.lua` driver parks mercenary Starhammers with
+  `orderAttack` on the targets and polls for the effect (`destroy()`
+  only for hook-less teardown);
+- a destroyed `SpaceObject` handle still answers field reads but
+  `getCallSign()` returns *nothing* - never feed it to `setCallSign`
+  without a non-nil default (this crashed `mk_transport_like` in
+  scenario 40; fixed via a `lc_sign` field recorded while alive).
+
+#### AI combat: how to stage a reliable scripted kill (engine-verified)
+
+Source-dive + duel probes on the vendored 2024.12 engine:
+
+- `ShipAI::runAttack` fires **missile tubes only** - CPU ships never fire
+  their beams (only the player trigger does). Beam stats on CPU templates
+  are scenery for AI-vs-AI fights; HVLI tubes are the whole damage story
+  (Starhammer II: 2 tubes, 10 s load -> ~1.4 dps, ~17 s to first hit).
+- `AI_Attack` keeps `order_target` even after it dies: the AI then sits
+  idle beside the wreck forever (`updateTarget` has no reacquire for the
+  explicit-attack case). A driver wanting chain kills must retarget.
+- Movement: `flyTowards` keeps a 4U/2.5U standoff, so a target that flees
+  or hides in a nebula (radar-dark) can stall the engagement; a Starhammer
+  without warp also simply cannot catch an 80 u/s transport.
+- **Warp-locked targets are unkillable by AI**: a ship whose AI has it
+  warp-cruising toward a far waypoint stays *in* warp while an attacker
+  keeps pace (both at warp speed, distance steady ~2U) - missiles cannot
+  hit anything inside warp, so zero damage accrues no matter how long the
+  escort watches. `setWarpDrive(false)` is not enough either: the scenario
+  re-grants FTL (`ensure_ftl`) and the flight order re-engages warp the
+  same tick. What works is pinning the prey on impulse: re-issue
+  `orderIdle()` + `setWarpDrive(false)` *after* the scenario update every
+  tick (the driver's update wrapper), which keeps it a solvable, hittable
+  impulse target and still kills it with organic AI fire.
+
+`lc_autotest.lua` therefore *drives* its mercenaries: warp-capable
+Starhammers, one per defender or two per freighter, spawned beside the
+target and re-ordered onto the next pool survivor after every kill
+(`order_target` sticks to wrecks otherwise); natural AI flight, no
+per-tick gluing (teleporting each tick resets the missile lead solution -
+probe5: natural ships killed an Adder in ~18 s while glued ones never
+hit). Kills take ~20-45 s, so every organic-kill assertion polls instead
+of sampling, and the timeline leaves 12+ s windows per kill.
+
 ### B. Timed script / timeline
 
 `mission_time = mission_time + delta; if mission_time > 120 and phase == 1`

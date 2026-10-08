@@ -1313,6 +1313,8 @@ function phase2_start()
         t.lc_stopped = false
         t.lc_book = nil
         t.lc_next = nil
+        t.lc_sign = "Freighter " .. i   -- remembered while alive: getCallSign on a
+                                        -- destroyed hull returns nothing (mk_transport_like)
         t:setDescriptionForScanState("fullscan", "A civilian freighter. Cargo manifest: routine supplies.")
         local tr = t
         tr:setCommsFunction(function(src)
@@ -1387,11 +1389,17 @@ function mk_transport_like(old)
     local route = { stations.lumina, stations.kajaani, stations.tampere, stations.turku, stations.lut }
     local st = route[math.random(1, #route)]
     local sx, sy = st:getPosition()
+    -- getCallSign on a destroyed hull yields nothing, so pass it no nil
+    -- default and never crash update(): prefer the remembered sign.
+    local sign = old.lc_sign
+    if sign == nil or sign == "" then sign = old:getCallSign() end
+    if sign == nil or sign == "" then sign = "Freighter ?" end
     local t = CpuShip():setTemplate("Atlantis"):setFaction("Independent")
-        :setPosition(sx + random(-2000, 2000), sy + random(-2000, 2000)):setCallSign(old:getCallSign())
+        :setPosition(sx + random(-2000, 2000), sy + random(-2000, 2000)):setCallSign(sign)
     t.lc_stopped = false
     t.lc_book = nil
     t.lc_next = nil
+    t.lc_sign = sign
     t:setDescriptionForScanState("fullscan", "A civilian freighter. Cargo manifest: routine supplies.")
     local tr = t
     tr:setCommsFunction(function(src)
@@ -1480,6 +1488,10 @@ function probe_has_ftl()
     return missing == 0
 end
 
+-- NOTE: the engine only fires onDestruction hooks on damage kills
+-- (takeHullDamage), never on a script destroy() - so probe_kill_group is
+-- safe only for polling-based groups (ambush, lut, wave). Destruction-hook
+-- groups (b300, transports, guards) are killed organically by the autotest.
 function probe_kill_group(name)
     local g = groups[tostring(name)]
     if g == nil then

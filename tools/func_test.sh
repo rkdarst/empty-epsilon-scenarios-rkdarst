@@ -53,10 +53,12 @@ while IFS= read -r d; do LD_PATH+="${LD_PATH:+:}$d"; done < <(find "$ROOT/vendor
 EEHOME="$(mktemp -d)"; trap 'rm -rf "$EEHOME" "$EEHOME.fifo"' EXIT
 mkdir -p "$EEHOME/.emptyepsilon/scripts" "$EEHOME/run"
 DRIVER="${AUTOTEST:-$ROOT/tools/autotest/lc_autotest.lua}"
+PRE="${SCEN_PRE:-}"   # optional file cat'd BEFORE the scenario (e.g. tools/autotest/story_pre.lua)
+[[ -z "$PRE" || -f "$PRE" ]] || { echo "not a file: SCEN_PRE=$PRE" >&2; exit 2; }
 if [[ -f "$DRIVER" ]]; then
-    cat "$SCEN" "$DRIVER" > "$EEHOME/.emptyepsilon/scripts/$BASE"
+    cat ${PRE:+"$PRE"} "$SCEN" "$DRIVER" > "$EEHOME/.emptyepsilon/scripts/$BASE"
 else
-    cp "$SCEN" "$EEHOME/.emptyepsilon/scripts/"
+    cat ${PRE:+"$PRE"} "$SCEN" > "$EEHOME/.emptyepsilon/scripts/$BASE"
 fi
 for d in resources scripts packs; do [[ -e "$DATA/$d" ]] && ln -sfn "$DATA/$d" "$EEHOME/run/$d"; done
 

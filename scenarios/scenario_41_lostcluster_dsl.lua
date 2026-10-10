@@ -16,7 +16,7 @@ gen = {
     flags = {                                    -- flags: + auto once:
         ambush_spawned = false, ambush_cleared = false, b300_dropped = false,
         h200_delivered = false, b300_delivered = false,
-        told_intel = false, told_tampere = false,
+        told_intel = false, told_tampere = false, tampere_found = false,
     },
 }
 gen_events_fired = { thieves = false }
@@ -26,9 +26,15 @@ E_ARCH = {                                       -- archetypes (at_start: false)
     ambusher = { template = "Piranha F12", faction = "Kraylor", list = {} },
 }
 ITEMS = {                                        -- items: (one_of, bookkeeping
-    h200 = { label = "H200 GPU nodes", carrier = false, obj = nil },   -- like LC)
-    b300 = { label = "B300 GPU nodes", carrier = false, obj = nil },
+    h200 = { label = "H200 GPU nodes", carrier = false, obj = nil,   -- like LC)
+             far = "A vented cargo crate with a scorched, unreadable label." },
+    b300 = { label = "B300 GPU nodes", carrier = false, obj = nil,
+             far = "A vented cargo crate with a scorched, unreadable label." },
 }
+GEN_LABEL_U = 5          -- items.label.scanned range (GAP-14)
+GEN_FIND_U = 6           -- hidden station reveal range (GAP-4)
+GEN_STATION_HULL_U = { ["Small Station"] = 0.3, ["Medium Station"] = 1.0,
+                       ["Large Station"] = 1.3 }   -- scripts/model_data.lua
 
 -- ========================= helpers (generator-provided) =========================
 function U(u)
@@ -161,12 +167,81 @@ function gen_take_item(id, ship)                 -- proximity pickup stand-in
 end
 
 function gen_spawn_item(id, x, y)
+    -- GAP-14: an item should be able to declare what it READS before someone
+    -- scans it. Artifacts never advance through the scan states (notes/06), so
+    -- the generator has to write the current story text into base + all three
+    -- states and flip them together on proximity (gen_watch_labels).
     local a = Artifact():setModel("artifact6"):setPosition(x, y):setSpin(0.3)
-    a:setDescription("A vented cargo crate: " .. ITEMS[id].label .. ".")
-    a:setDescriptionForScanState("notscanned", "A vented cargo crate.")
-    a:setDescriptionForScanState("simplescan", "A vented cargo crate, " .. ITEMS[id].label .. "?")
-    a:setDescriptionForScanState("fullscan", "A cargo crate holding " .. ITEMS[id].label .. ".")
+    gen_item_text(a, ITEMS[id].far)
     ITEMS[id].obj = a
+    ITEMS[id].revealed = false
+end
+
+function gen_item_text(a, text)
+    a:setDescription(text)
+    a:setDescriptionForScanState("notscanned", text)
+    a:setDescriptionForScanState("simplescan", text)
+    a:setDescriptionForScanState("fullscan", text)
+end
+
+function gen_watch_labels(delta)                 -- GAP-2 + GAP-14
+    math.abs(0)
+    local p = gen_player()
+    if p == nil then return end
+    for _, it in pairs(ITEMS) do
+        if it.obj ~= nil and it.obj:isValid() and not it.revealed
+           and in_range(p, it.obj, U(GEN_LABEL_U)) then
+            it.revealed = true
+            gen_item_text(it.obj, "A cargo crate holding " .. it.label .. ".")
+        end
+    end
+end
+
+-- GAP-13: interactions have no range semantics in the grammar; the generator
+-- gets "alongside" from the station hull (docking always counts).
+function gen_station_hull_u(st)
+    return GEN_STATION_HULL_U[st.lc_template] or 0.3
+end
+
+function gen_handover_u(st)
+    local r = gen_station_hull_u(st) + 0.4
+    if r < 1.0 then r = 1.0 end
+    return r
+end
+
+function gen_near_or_docked(a, b)
+    if a == nil or b == nil then return false end
+    local docked = false
+    pcall(function() docked = a:isDocked(b) end)
+    if docked then return true end
+    return in_range(a, b, U(gen_handover_u(b)))
+end
+
+-- GAP-15: no restock/shop primitive — this is the whole "service".
+function gen_replenish(station, ship)
+    if ship == nil then return "We cannot service a ship we cannot see." end
+    if not gen_near_or_docked(ship, station) then
+        return "Pull alongside us (within " .. string.format("%.1f", gen_handover_u(station)) ..
+            " units), or dock, and we will load you up."
+    end
+    local mx, cur = 0, 0
+    pcall(function() mx = ship:getWeaponStorageMax("Homing") or 0 end)
+    if mx <= 0 then return "We would, but your hull has no homing tubes fitted - that is all we can spare." end
+    pcall(function() cur = ship:getWeaponStorage("Homing") or 0 end)
+    if cur >= mx then return "Your homing racks are already full: " .. cur .. " of " .. mx .. "." end
+    ship:setWeaponStorage("Homing", mx)
+    return "Loaded " .. (mx - cur) .. " homing missiles, no charge - that is all we can spare."
+end
+
+function gen_replenish_reply(t, src, replies)
+    if t:getFaction() ~= "Human Navy" then return end
+    addCommsReply("Replenish our homing missiles.", function(comms_source, comms_target)
+        math.abs(0)
+        local who = comms_source or src
+        setCommsMessage(gen_replenish(t, who))
+        replies(t, who)   -- replies only: the result stays visible
+        return true
+    end)
 end
 
 -- ========================= wormhole pair (generator fix, note 01) =========================
@@ -214,8 +289,9 @@ function gen_wormholes()
 end
 
 -- ========================= stations + init =========================
-function gen_station(obj, fn)                    -- LC mk_station pattern
+function gen_station(obj, fn, template)           -- LC mk_station pattern
     local st = obj
+    st.lc_template = template                     -- hull radius (GAP-13)
     if fn then
         st:setCommsFunction(function(src)
             math.abs(0)
@@ -225,19 +301,49 @@ function gen_station(obj, fn)                    -- LC mk_station pattern
     return st
 end
 
+-- GAP-4: `hidden: nebula` is not just a nebula — a same-faction object is
+-- listed for the players at ANY range (shared telemetry, notes/06), so hiding
+-- means staying out of the players' faction until someone gets close.
+function gen_hide_station(st, reveal_to)
+    st.lc_hidden, st.lc_reveal_to = true, reveal_to
+    st:setFaction("Independent")
+    pcall(st.setShortRangeRadarRange, st, 0)      -- no telemetry bubble
+    return st
+end
+
+function gen_watch_hidden(delta)                  -- GAP-1/2/4: a `watch:` entry
+    math.abs(0)
+    local p = gen_player()
+    if p == nil then return end
+    for _, name in ipairs(gen.hidden_stations) do
+        local st = E[name]
+        if st ~= nil and st:isValid() and not st.lc_revealed
+           and in_range(p, st, U(GEN_FIND_U)) then
+            st.lc_revealed = true
+            if st.lc_reveal_to then st:setFaction(st.lc_reveal_to) end
+            pcall(st.setShortRangeRadarRange, st, 5000)
+            gen.flags[name .. "_found"] = true
+            print("GEN: " .. name .. " revealed")
+        end
+    end
+end
+
 function init()
     -- Factions: Kraylor are engine-default enemies of the Human Navy.
     E.lumina = gen_station(
         SpaceStation():setTemplate("Medium Station"):setFaction("Human Navy"):setPosition(0, 10000):setCallSign("Lumina 1"),
-        dlg_lumina_intro)
+        dlg_lumina_intro, "Medium Station")
     E.lumina.lc_x, E.lumina.lc_y = 0, 10000
+    Nebula():setPosition(150000, 20000)           -- world.stars.deep.has_nebula
     E.tampere = gen_station(
         SpaceStation():setTemplate("Small Station"):setFaction("Human Navy"):setPosition(150000, 20000):setCallSign("Tampere 1"),
-        dlg_tampere_intro)
+        dlg_tampere_intro, "Small Station")
     E.tampere.lc_x, E.tampere.lc_y = 150000, 20000
+    gen.hidden_stations = { "tampere" }
+    gen_hide_station(E.tampere, "Human Navy")     -- GAP-4: hidden: nebula
     E.kajaani = gen_station(
         SpaceStation():setTemplate("Medium Station"):setFaction("Human Navy"):setPosition(200000, -30000):setCallSign("Kajaani 1"),
-        dlg_kajaani_intro)
+        dlg_kajaani_intro, "Medium Station")
     E.kajaani.lc_x, E.kajaani.lc_y = 200000, -30000
 
     gen_wormholes()
@@ -258,10 +364,19 @@ function dlg_lumina_intro(t, src)
 end
 
 function dlg_lumina_intro_replies(t, src)
+    -- GAP-13: `take player <item>` is an interaction with no distance term in
+    -- the grammar, but it is a physical transfer. The generator wraps every
+    -- physical give/take in the hand-over gate (GAP-15 style condition).
     if gen_player_has("h200") then
         addCommsReply("Here's the H200 GPU nodes.", function(comms_source, comms_target)
             math.abs(0)
             local who = comms_source or src
+            if not gen_near_or_docked(who, t) then
+                setCommsMessage("Too far to transfer anything - come alongside us (within " ..
+                    string.format("%.1f", gen_handover_u(t)) .. " units) or dock.")
+                dlg_lumina_intro_replies(t, who)
+                return true
+            end
             gen_take(who, "h200")
             gen.flags.h200_delivered = true
             setCommsMessage([[The H200 nodes! Kajaani will be relieved.]])
@@ -274,6 +389,12 @@ function dlg_lumina_intro_replies(t, src)
         addCommsReply("We found the B300 nodes too.", function(comms_source, comms_target)
             math.abs(0)
             local who = comms_source or src
+            if not gen_near_or_docked(who, t) then
+                setCommsMessage("Too far to transfer anything - come alongside us (within " ..
+                    string.format("%.1f", gen_handover_u(t)) .. " units) or dock.")
+                dlg_lumina_intro_replies(t, who)
+                return true
+            end
             gen_take(who, "b300")
             gen.flags.b300_delivered = true
             setCommsMessage([[Recovered! You've put the cluster back together, spacer.]])
@@ -289,6 +410,7 @@ function dlg_lumina_intro_replies(t, src)
             return dlg_lumina_intel(t, comms_source or src)
         end)
     end
+    gen_replenish_reply(t, src, dlg_lumina_intro_replies)  -- GAP-15
 end
 
 function dlg_lumina_intel(t, src)
@@ -318,6 +440,12 @@ function dlg_tampere_intro_replies(t, src)
         addCommsReply("You're clear now. The H200 nodes?", function(comms_source, comms_target)
             math.abs(0)
             local who = comms_source or src
+            if not gen_near_or_docked(who, t) then       -- GAP-13: physical hand-over
+                setCommsMessage("Too far to transfer anything - come alongside us (within " ..
+                    string.format("%.1f", gen_handover_u(t)) .. " units) or dock.")
+                dlg_tampere_intro_replies(t, who)
+                return true
+            end
             gen_give(who, "h200")
             setCommsMessage([[Take them - they were always for Lumina 1. The thieves took the B300s toward the gate.]])
             gen_notify([[The H200 nodes are aboard. Deliver them to Lumina 1.]], t)
@@ -373,6 +501,7 @@ function dlg_kajaani_intro_replies(t, src)
             return true
         end)
     end
+    gen_replenish_reply(t, src, dlg_kajaani_intro_replies)   -- GAP-15
 end
 
 function dlg_kajaani_intel(t, src)
@@ -408,15 +537,28 @@ function gen_watch_ambush(delta)
     end
 end
 
--- --- scripts.b300_watcher (GAP-3/9: would be on_destroy + initial + pickup) --
+-- --- scripts.b300_watcher (GAP-3/9/12: would be on_destroy + initial + pickup) --
+gen.b300_spot = { x = 140000, y = 20000 }        -- last seen raidler position
 function gen_watch_b300(delta)
     math.abs(0)
-    -- GAP-3: LC hooks onDestruction per thief; the DSL has no lifecycle
-    -- hook, so we poll the archetype count and use the tracked death spot.
-    if not gen.flags.b300_dropped and gen_alive("raider") == 0
-       and gen_event_fired("thieves") then
+    -- GAP-3/GAP-12: LC hooks onDestruction per thief, but that hook only fires
+    -- on DAMAGE kills (notes/06) - a script-destroyed or GM-removed hull would
+    -- take the cargo out of the game. So the DSL form must be a POLL, and the
+    -- poll has to track the drop position ITSELF: the hook that would normally
+    -- record it never ran.
+    local alive = 0
+    for _, s in ipairs(E_ARCH.raider.list) do
+        if s:isValid() then
+            gen.b300_spot.x, gen.b300_spot.y = s:getPosition()
+            alive = alive + 1
+        end
+    end
+    if not gen.flags.b300_dropped and alive == 0 and gen_event_fired("thieves") then
         gen.flags.b300_dropped = true
-        gen_spawn_item("b300", gen.lastkill_x, gen.lastkill_y)
+        -- Drop clear of the wormhole mouth the raidlers parked next to: a
+        -- weighted object sitting in a mouth gets dragged/teleported forever
+        -- (wormHole.cpp), which reads as a NaN position within seconds.
+        gen_spawn_item("b300", gen.b300_spot.x + U(3), gen.b300_spot.y + U(3))
         gen_notify("Debris field by the gate: a GPU crate floats among the wreckage.")
     end
     -- GAP-9: no pickup semantics; proximity bookkeeping stand-in.
@@ -494,7 +636,9 @@ function update(delta)
     if gen.done then return end
     gen_events()
     gen_watch_ambush(delta)                    -- scripts: watchers, in YAML order
+    gen_watch_hidden(delta)                    -- GAP-4: hidden: nebula reveal
     gen_watch_b300(delta)
+    gen_watch_labels(delta)                    -- GAP-14: item label states
     gen_stages()
     gen_outcomes()
 end

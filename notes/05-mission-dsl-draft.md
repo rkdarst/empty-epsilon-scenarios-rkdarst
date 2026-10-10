@@ -148,8 +148,8 @@ the hand-emitted generator output (validated: smoke + live tick driver
 |---|---|---|
 | 1 | Conditional/watch events — events are time-driven only | `watch:` entries: `when:` polled, `do:` |
 | 2 | Proximity semantics (approach ambush) | `in_range(a, b, u)` already in grammar; needs a `watch:` host |
-| 3 | Object lifecycle hooks (`on_destroy: [drop b300]`) | archetype-level `on_destroy:` actions; LC drops cargo per-ship via `onDestruction` |
-| 4 | Hidden stations (`hidden: nebula`, radar shadow until found) | station field `hidden: true` + generator found-watcher |
+| 3 | Object lifecycle hooks (`on_destroy: [drop b300]`) | archetype-level `on_destroy:` actions — but see GAP-12: a hook alone is not a guarantee, the emitted code must also poll |
+| 4 | Hidden stations (`hidden: nebula`, radar shadow until found) | station field `hidden: true` + generator found-watcher; hiding needs *faction* neutrality, not just a nebula (notes/06) |
 | 5 | Behaviour specs (leash/patrol routes; `ai:` is vocabulary-only) | `leash: <anchor>, <u>` / `patrol: [...]` |
 | 6 | FTL default — stock templates ship without warp | `ships.*.ftl: warp` (already used in YAML; generator must apply `setWarpDrive` each tick, LC `ensure_ftl`) |
 | 7 | Ship comms (ship-to-ship transfers; comms exist only on stations) | `ships.player.comms:` allowed; needs per-entity handler install |
@@ -157,6 +157,10 @@ the hand-emitted generator output (validated: smoke + live tick driver
 | 9 | Item `initial:` placement + pickup semantics | `items.*.initial: {at: <obj>}`; pickup = proximity→cargo |
 | 10 | No mission-directive API in 2024.12 — stages compile to `globalMessage` announcements; trackers are wishful (check newer releases) |
 | 11 | No `fail()` — defeat compiles to `victory(<enemy faction>)` | `outcomes.defeat.faction:` option |
+| 12 | `on_destroy:` implies the engine always fires — it does **not**: `onDestruction` runs only on damage kills, so a hookless death (script `destroy()`, GM removal) silently drops nothing and the mission softlocks | `on_destroy:` compiles to hook **and** a polled watcher (`watch:` with `grace: 10`) over the same actions |
+| 13 | Actions have no range requirement — "hand over the part" fires from anywhere in the map | `do: give/take/transfer ... within <u> of <obj>` (or `requires: in_range(...)`); generator emits `near_or_docked()` |
+| 14 | Item labels are a single string — no "what it reads before you scan it" | `items.*.label.unscanned:` / `.scanned:` written into base + all three scan-state texts, flipped by proximity (artifacts never advance scan states, notes/06) |
+| 15 | No restock/shop primitive — every station interaction has to be hand-written | `station.services: [replenish(<weapon>, free)]`, compiled to one `setWeaponStorage(w, getWeaponStorageMax(w))` call |
 
 Engine API corrections found while writing the twin (docs fixed here
 first): 2024.12 has **no** `setMissionDirective`, **no** `fail()`, and
@@ -169,7 +173,16 @@ the enemy faction.
 
 ```sh
 python3 tools/dsl_check.py dsl/samples/last-mile.yaml   # must print OK
+python3 tools/dsl_check.py dsl/samples/lost-cluster-lite.yaml  # gap stress file
+AUTOTEST=tools/autotest/gen41_autotest.lua RUNTIME=60 \
+    tools/func_test.sh scenarios/scenario_41_lostcluster_dsl.lua  # twin must pass
 ```
+
+The twin (`scenario_41_lostcluster_dsl.lua`) is the executable side of the
+experiment: it is what the Phase-2 generator's output should look like, and
+`tools/autotest/gen41_autotest.lua` proves the emitted shapes actually hold
+up live — hidden-station neutrality, polled cargo drops after hookless
+deaths, hand-over range, two-state item labels, free homings.
 
 PyYAML comes from the system package or, on pip-less hosts, from
 `./tools/get_pyyaml.sh` once (rootless sdist extraction into

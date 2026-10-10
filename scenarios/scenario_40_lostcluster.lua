@@ -33,6 +33,64 @@ function d2(a, b)
     return (ax - bx) ^ 2 + (ay - by) ^ 2
 end
 
+-- ========================= mission tuning knobs =========================
+-- Distances are in in-game units (U() converts to script units).
+LC_FIND_U = 6        -- a hidden station stops hiding at this range. The player
+                     -- short-range radar is 5U and nebulae only blind the
+                     -- LONG-range radar, so ~6u is where the station shows up
+                     -- anyway. (Was 40u, which flagged stations as "found"
+                     -- while they were still supposed to be lost.)
+LC_HANDOVER_U = 1    -- how close to Lumina 1 you must be to hand hardware over
+                     -- (docking always counts, whatever the distance).
+LC_REVEAL_U = 5      -- cargo-container shipping labels become readable here.
+TURKU_NEB = 10       -- nebulas hiding Turku 1's caches (was 7)
+TURKU_R_MIN, TURKU_R_MAX = 10, 18  -- ring they are scattered on. A nebula has
+                                  -- a 5U radius (notes/06), so this spacing
+                                  -- (~9u apart) keeps the clouds distinguish-
+                                  -- able, and the whole search stays at most
+                                  -- one sector away; the old +-25u square put
+                                  -- caches up to 35u out, 1-2 sectors off-map
+TURKU_JUNK = 6       -- decoys inside the spare nebulas (+ 2 loose ones)
+TURKU_LOOSE_JUNK = 2
+TURKU_LOOSE_SPREAD_U = 12          -- how far the loose decoys wander
+
+-- Station hull radii in script units per in-game unit, taken from
+-- scripts/model_data.lua (space_station_4: radius 300; space_station_3: radius
+-- 1000; U(1) == 1000 script units). Containers are ejected just clear of the
+-- hull and always inside the hand-over bubble, so a crate is never dropped
+-- somewhere the player cannot reach from the hand-over position.
+STATION_HULL_U = { ["Small Station"] = 0.3, ["Medium Station"] = 1.0, ["Large Station"] = 1.3 }
+
+function station_hull_u(st)
+    return STATION_HULL_U[st.lc_template] or 0.3
+end
+
+-- How close a ship must be to trade with a station: "next to the hull", which
+-- for a Small station is the flat LC_HANDOVER_U and for bigger hulls grows with
+-- their radius (docking always satisfies it regardless).
+function handover_u(st)
+    local r = station_hull_u(st) + 0.4
+    if r < LC_HANDOVER_U then r = LC_HANDOVER_U end
+    return r
+end
+
+-- Distance test for the "come closer" gates: docking always satisfies it.
+function near_or_docked(a, b, u)
+    if a == nil or b == nil then return false end
+    local docked = false
+    pcall(function() docked = a:isDocked(b) end)
+    if docked then return true end
+    return d2(a, b) < U(u) ^ 2
+end
+
+-- Read a per-object script field off an object that may already be gone
+-- (custom fields die with the object; notes/04).
+function obj_field(obj, key, default)
+    local ok, v = pcall(function() return obj[key] end)
+    if ok and v ~= nil then return v end
+    return default
+end
+
 function active_players()
     local t = {}
     local ok, list = pcall(getActivePlayerShips)
@@ -203,33 +261,38 @@ function part_delivered_count(names)
 end
 
 -- ========================= cargo containers =========================
--- The engine does NOT progress Artifacts through the scan states (only
--- SpaceShips do; artifacts are "created as fully scanned"), so a reveal
--- keyed to one scan state can silently never surface in the UI. Instead,
--- every description starts out generic in ALL scan states, and update()
--- flips base + every scan state at once when a player comes within 5u -
--- whichever state the engine consults, the label then reads correctly.
+-- Cargo = physical Artifact()s; the scenario keeps the carry/deliver
+-- bookkeeping. Labels are a small state machine (see lc_container_text).
 containers = {}
+CONTAINER_FAR = "An unmarked cargo container."
+JUNK_DESC = "Junk (spare parts)."
+JUNK_FAR = "Junk (unchecked)."
 
-function mk_container(desc, x, y)
+-- The engine never advances an Artifact through the scan states (only
+-- SpaceShips do; artifacts are "created as fully scanned"), so the text for
+-- the current *story* state has to be written into base + all three states at
+-- once; whichever state the UI consults, it reads the same thing. update()
+-- flips them together when a player comes within LC_REVEAL_U.
+function lc_container_text(a, text)
+    a:setDescription(text)
+    a:setDescriptionForScanState("notscanned", text)
+    a:setDescriptionForScanState("simplescan", text)
+    a:setDescriptionForScanState("fullscan", text)
+end
+
+-- far = what the label reads until someone flies close enough to scan it.
+function mk_container(desc, x, y, far)
     local a = Artifact():setModel("artifact6"):setPosition(x, y):setSpin(0.3)
-    a:setDescription("An unmarked cargo container.")
-    a:setDescriptionForScanState("notscanned", "An unmarked cargo container.")
-    a:setDescriptionForScanState("simplescan", "A cargo container with a worn shipping label.")
-    a:setDescriptionForScanState("fullscan", "A cargo container with a worn shipping label, too far away to read the printing.")
-    local c = { a = a, name = nil, desc = desc, junk = false, revealed = false }
+    lc_container_text(a, far or CONTAINER_FAR)
+    local c = { a = a, name = nil, desc = desc, far = far or CONTAINER_FAR,
+                junk = false, revealed = false }
     table.insert(containers, c)
     return a, c
 end
 
 function lc_reveal_container(c)
     c.revealed = true
-    if c.a:isValid() then
-        c.a:setDescription(c.desc)
-        c.a:setDescriptionForScanState("notscanned", c.desc)
-        c.a:setDescriptionForScanState("simplescan", c.desc)
-        c.a:setDescriptionForScanState("fullscan", c.desc)
-    end
+    if c.a:isValid() then lc_container_text(c.a, c.desc) end
     print("LC: container revealed: " .. c.desc)
 end
 
@@ -240,17 +303,16 @@ function lc_reveal_all()
 end
 
 function mk_junk(x, y)
-    local a, c = mk_container("Junk (spare parts).", x, y)
+    local a, c = mk_container(JUNK_DESC, x, y, JUNK_FAR)
     a:allowPickup(false)
     c.junk = true
-    c.revealed = true   -- decoys always tell the truth about themselves
-    a:setDescription(c.desc)
-    a:setDescriptionForScanState("notscanned", c.desc)
-    a:setDescriptionForScanState("simplescan", c.desc)
-    a:setDescriptionForScanState("fullscan", c.desc)
     a:setCommsFunction(function(comms_source, comms_target)
         math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
-        setCommsMessage("Automated salvage tag: spare hull plating and scrap parts. Nothing worth recovering.")
+        if c.revealed then
+            setCommsMessage("Automated salvage tag: spare hull plating and scrap parts. Nothing worth recovering.")
+        else
+            setCommsMessage("Automated salvage tag, corroded beyond reading at this range. Fly close enough to scan it.")
+        end
         return true
     end)
     return a
@@ -282,6 +344,10 @@ function mk_part(name, x, y)
         return true
     end)
     parts[name].obj = a
+    -- Remember where it was dumped: the hint chain can then name the sector
+    -- instead of leaving a crate that died far off-route unrecoverable.
+    parts[name].drop_x, parts[name].drop_y = x, y
+    parts[name].drop_sector = getSectorName(x, y)
     return a
 end
 
@@ -291,6 +357,14 @@ function ring_pos(st, u)
     local ang = random(0, 6.283)
     local x, y = st:getPosition()
     return x + math.cos(ang) * U(u), y + math.sin(ang) * U(u)
+end
+
+-- Where a station ejects a container: just clear of its hull and always inside
+-- that station's hand-over bubble (0.65u for a Small, 1.35u for a Medium).
+function eject_pos(st)
+    local r = station_hull_u(st) + 0.35
+    if r >= handover_u(st) then r = handover_u(st) - 0.05 end
+    return ring_pos(st, r)
 end
 
 -- ========================= ambient world =========================
@@ -449,13 +523,27 @@ function ambient_traders()
 end
 
 function ambient_wormholes()
-    local ax, ay = ambient_spot(12)
+    -- Pick the pair by rejection sampling: both mouths AND both offset exits
+    -- must sit clear of the station keep-out rings. One shot at a single
+    -- ambient_spot() made this a coin flip per run (the autotest then sees an
+    -- "ambient wormhole pair" that was never seeded); sampling until one fits
+    -- is pure arithmetic, so 200 attempts are free at init.
+    local ax, ay, bx, by, dx, dy, dist
+    for _ = 1, 200 do
+        local sx, sy = random(ambient_box.x0, ambient_box.x1), random(ambient_box.y0, ambient_box.y1)
+        local mx = ambient_box.x1 - (sx - ambient_box.x0)
+        local my = ambient_box.y1 - (sy - ambient_box.y0)
+        local ddx, ddy = mx - sx, my - sy
+        local dd = math.sqrt(ddx * ddx + ddy * ddy)
+        if dd >= U(10) and ambient_clear(sx, sy, 12) and ambient_clear(mx, my, 12)
+           and ambient_clear(mx + ddx / dd * U(3.5), my + ddy / dd * U(3.5), 8)
+           and ambient_clear(sx - ddx / dd * U(3.5), sy - ddy / dd * U(3.5), 8) then
+            ax, ay, bx, by = sx, sy, mx, my
+            dx, dy, dist = ddx, ddy, dd
+            break
+        end
+    end
     if ax == nil then return end
-    local bx, by = ambient_box.x1 - (ax - ambient_box.x0), ambient_box.y1 - (ay - ambient_box.y0)
-    if not ambient_clear(bx, by, 12) then return end
-    local dx, dy = bx - ax, by - ay
-    local dist = math.sqrt(dx * dx + dy * dy)
-    if dist < U(10) then return end   -- need room for the offset exits (see below)
     -- Engine physics (wormHole.cpp 2024.12): a mouth drags every weighted
     -- object within 2.5U toward its center and teleports anything that gets
     -- within ~0.18U to target_position +/- 0.5U, with NO re-entry cooldown
@@ -466,7 +554,6 @@ function ambient_wormholes()
     -- drift at the worst exit spread is ~35 m/s, easily outthrust).
     local ex, ey = bx + dx / dist * U(3.5), by + dy / dist * U(3.5)
     local fx, fy = ax - dx / dist * U(3.5), ay - dy / dist * U(3.5)
-    if not ambient_clear(ex, ey, 8) or not ambient_clear(fx, fy, 8) then return end
     local a = WormHole():setPosition(ax, ay)
     local b = WormHole():setPosition(bx, by)
     a:setTargetPosition(ex, ey)
@@ -540,16 +627,25 @@ function init()
     stations.lumina = mk_station("Lumina 1", "Medium Station", "Human Navy", lx, ly, commsLumina)
     local kx, ky = sector_center("H20")
     stations.kajaani = mk_station("Kajaani 1", "Medium Station", "Human Navy", kx, ky, commsKajaani)
-    -- Hidden stations sit inside a nebula: radar-shadowed until someone flies in.
+    -- Hidden stations sit inside a nebula AND start out neutral: a Human Navy
+    -- station is a friendly contact whose short-range telemetry is shared with
+    -- the player on Relay/Strategic Map, which is exactly what gives a "hidden"
+    -- station away. Independent = no friendly contact, no telemetry share, and
+    -- the Kraylor (at war only with the Human Navy) leave it alone.
     local tx, ty = sector_center("H5")
     Nebula():setPosition(tx, ty)
     stations.tampere = mk_station("Tampere 1", "Small Station", "Human Navy", tx, ty, commsTampere)
+    hide_station(stations.tampere, "Human Navy")
     local ux, uy = sector_center("B2")
     Nebula():setPosition(ux, uy)
     stations.turku = mk_station("Turku 1", "Small Station", "Human Navy", ux, uy, commsTurku)
+    hide_station(stations.turku, "Human Navy")
     local lx3, ly3 = sector_center("L3")
     Nebula():setPosition(lx3, ly3)
     stations.lut = mk_station("LUT 1", "Small Station", "Human Navy", lx3, ly3, commsLUT)
+    -- LUT 1 keeps its own reveal scene (neutral -> Kraylor -> Human Navy), so
+    -- it gets no reveal faction here.
+    hide_station(stations.lut, nil)
 
     -- Home area dressing around Lumina 1.
     Nebula():setPosition(lx + U(4), ly + U(2))
@@ -572,6 +668,9 @@ function init()
         s:onDestruction(b300_died)
         table.insert(groups.b300, s)
     end
+    -- Safety net: if a hull dies without firing onDestruction (script destroy,
+    -- GM removal), the patrol's cargo must still reach the players.
+    mk_drop_watch("B300 GPU nodes", groups.b300, function(x, y) drop_b300(x, y) end)
 
     -- Central-map traffic, rows E-J x columns 6-15: static friendly lanes and
     -- hostile outposts; the engine AI engages anything that comes too close.
@@ -611,6 +710,7 @@ end
 function mk_station(name, tmpl, fac, x, y, fn)
     local s = SpaceStation():setTemplate(tmpl):setFaction(fac):setPosition(x, y)
     s:setCallSign(name)
+    s.lc_template = tmpl     -- hull radius lookups (STATION_HULL_U)
     if fn then
         local st = s
         -- Bind the target via closure: comms *functions* are documented to
@@ -621,6 +721,32 @@ function mk_station(name, tmpl, fac, x, y, fn)
         end)
     end
     return s
+end
+
+-- Park a Human Navy station out of sight: neutral faction (no friendly contact,
+-- no relay telemetry bubble) and a zeroed short-range radar range while dark.
+-- reveal_to = faction it adopts once found, or nil when a scripted scene owns
+-- the station's faction (LUT 1).
+function hide_station(st, reveal_to)
+    st.lc_hidden = true
+    st.lc_reveal_to = reveal_to
+    st:setFaction("Independent")
+    pcall(st.setShortRangeRadarRange, st, 0)
+    return st
+end
+
+-- One-way, idempotent: a player flew close enough to have seen it anyway.
+function station_reveal(name)
+    local st = stations[name]
+    if st == nil or not st:isValid() then return end
+    if found[name] then return end
+    found[name] = true
+    if st.lc_hidden and not st.lc_revealed then
+        st.lc_revealed = true
+        if st.lc_reveal_to then st:setFaction(st.lc_reveal_to) end
+        pcall(st.setShortRangeRadarRange, st, 5000)   -- engine default
+    end
+    print("LC: station " .. name .. " found")
 end
 
 -- Hook a player ship: cargo eject on death + a comms handler so other
@@ -657,27 +783,37 @@ function watch_player(p)
 end
 
 function spawn_turku_field(ux, uy)
+    -- A ring of nebulas around the station: TURKU_NEB clouds at
+    -- TURKU_R_MIN..TURKU_R_MAX units, evenly spaced in bearing with jitter, so
+    -- the search is a sweep of the neighbourhood instead of a scavenger hunt
+    -- across two sectors.
     local nebs = {}
-    for i = 1, 7 do
-        local nx, ny = ux + random(-U(25), U(25)), uy + random(-U(25), U(25))
+    local step = 6.283 / TURKU_NEB
+    for i = 1, TURKU_NEB do
+        local ang = (i - 1) * step + math.rad(random(-10, 10))
+        local r = U(random(TURKU_R_MIN * 100, TURKU_R_MAX * 100) / 100)
+        local nx, ny = ux + math.cos(ang) * r, uy + math.sin(ang) * r
         Nebula():setPosition(nx, ny)
         table.insert(nebs, { x = nx, y = ny })
     end
-    local a = math.random(1, 7)
-    local b = math.random(1, 7)
-    while b == a do b = math.random(1, 7) end
+    turku_nebs = nebs     -- for the functional test (ring geometry)
+    local a = math.random(1, TURKU_NEB)
+    local b = math.random(1, TURKU_NEB)
+    while b == a do b = math.random(1, TURKU_NEB) end
     mk_part("Intel compute nodes", nebs[a].x + random(-2000, 2000), nebs[a].y + random(-2000, 2000))
     mk_part("Lustre fileserver", nebs[b].x + random(-2000, 2000), nebs[b].y + random(-2000, 2000))
     local placed = 0
-    for i = 1, 7 do
-        if i ~= a and i ~= b and placed < 4 then
+    for i = 1, TURKU_NEB do
+        if i ~= a and i ~= b and placed < TURKU_JUNK then
             placed = placed + 1
             mk_junk(nebs[i].x + random(-2000, 2000), nebs[i].y + random(-2000, 2000))
         end
     end
-    for i = 1, 3 do
-        mk_junk(ux + random(-U(20), U(20)), uy + random(-U(20), U(20)))
+    for i = 1, TURKU_LOOSE_JUNK do
+        mk_junk(ux + random(-U(TURKU_LOOSE_SPREAD_U), U(TURKU_LOOSE_SPREAD_U)),
+                uy + random(-U(TURKU_LOOSE_SPREAD_U), U(TURKU_LOOSE_SPREAD_U)))
     end
+    return nebs
 end
 
 function spawn_infini_field()
@@ -747,7 +883,8 @@ function lc_who_has()
     local b300 = parts["B300 GPU nodes"]
     if b300 and not b300.delivered and not b300.carried then
         if part_out_there("B300 GPU nodes") then
-            s = s .. "\nThe B300 container is adrift in sector C10, where the Kraylor patrol went down."
+            s = s .. "\nThe B300 container is adrift in sector " .. (b300.drop_sector or "C10") ..
+                ", where the Kraylor patrol went down."
         else
             s = s .. "\nB300 GPU nodes: hijacked by a Kraylor patrol - Tampere 1 tracked them into sector C10."
         end
@@ -767,7 +904,44 @@ end
 -- autotest driver can invoke the exact same logic headless.
 
 function act_deliver(station, ship)
+    if ship == nil then return "We cannot read a cargo manifest off an empty comms channel." end
+    if not near_or_docked(ship, station, handover_u(station)) then
+        return "Too far to transfer anything - come alongside us (within " ..
+            string.format("%.1f", handover_u(station)) .. " units) or dock, and we can take it off you."
+    end
     return deliver_to_lumina(ship)
+end
+
+-- Stations that are ours can top up homing missiles, free of charge. Nothing
+-- else: no other weapon, no hull, no reputation business.
+function act_replenish(station, ship)
+    if ship == nil then return "We cannot service a ship we cannot see." end
+    if not near_or_docked(ship, station, handover_u(station)) then
+        return "Pull alongside us (within " .. string.format("%.1f", handover_u(station)) ..
+            " units), or dock, and we will load you up."
+    end
+    local mx, cur = 0, 0
+    pcall(function() mx = ship:getWeaponStorageMax("Homing") or 0 end)
+    if mx <= 0 then return "We would, but your hull has no homing tubes fitted - that is all we can spare." end
+    pcall(function() cur = ship:getWeaponStorage("Homing") or 0 end)
+    if cur >= mx then return "Your homing racks are already full: " .. cur .. " of " .. mx .. "." end
+    ship:setWeaponStorage("Homing", mx)
+    return "Loaded " .. (mx - cur) .. " homing missiles, no charge - that is all we can spare."
+end
+
+-- The homings choice, shared by every station dialog. Only ours hand them out,
+-- which also keeps LUT 1 quiet while it is dark or Kraylor-held. `replies` is
+-- the station's own *_replies function: result text first, then the menu, never
+-- the page function (the result would be wiped - see commsPlayerShip above).
+function comms_replenish_reply(t, src, replies)
+    if t:getFaction() ~= "Human Navy" then return end
+    addCommsReply("Replenish our homing missiles.", function(comms_source, comms_target)
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        local who = comms_source or src
+        setCommsMessage(act_replenish(t, who))
+        replies(t, who)   -- replies only: the result stays visible
+        return true
+    end)
 end
 
 function act_collect_tampere(t)
@@ -776,9 +950,9 @@ function act_collect_tampere(t)
         return "That container is already loaded aboard a recovery ship - deliver it to Lumina 1."
     end
     if not part_out_there("H200 GPU nodes") then
-        local x, y = ring_pos(t, 5)
+        local x, y = eject_pos(t)
         mk_part("H200 GPU nodes", x, y)
-        return "We float a container out to you - it is just outside the station."
+        return "We float a container out to you - it is right outside the station."
     end
     return "The container is already out there - check your sensors."
 end
@@ -789,7 +963,7 @@ function act_collect_lut(t)
         return "That container is already loaded aboard a recovery ship - deliver it to Lumina 1."
     end
     if not part_out_there("AMD compute nodes") then
-        local x, y = ring_pos(t, 5)
+        local x, y = eject_pos(t)
         mk_part("AMD compute nodes", x, y)
         return "Container is away, just outside the station."
     end
@@ -805,8 +979,9 @@ end
 function act_transfer_book(t, ship)
     if ship and d2(ship, t) < U(3) ^ 2 then
         parts[t.lc_book].given = true
-        local x, y = t:getPosition()
-        mk_part(t.lc_book, x + 1500, y + 1500)
+        local x, y = ring_pos(t, 1.2)   -- clear of any hull, still inside the
+                                        -- 3u "stop and transfer" range
+        mk_part(t.lc_book, x, y)
         return "Transferring the playbook container into your cargo bay area. Away it goes.", true
     end
     return "Too far - get within 3 units of the hull and hail again.", false
@@ -904,6 +1079,7 @@ function commsLumina_replies(t, src)
             return true
         end)
     end
+    comms_replenish_reply(t, src, commsLumina_replies)
 end
 
 function commsKajaani(t, src)
@@ -931,6 +1107,7 @@ If you find out anything about LUT 1, they were moving AMD nodes - but that is a
         setCommsMessage("Good luck out there.")
         return true
     end)
+    comms_replenish_reply(t, src, commsKajaani_replies)
 end
 
 function commsTampere(t, src)
@@ -968,6 +1145,7 @@ function commsTampere_replies(t, src)
         commsTampere_replies(t, comms_source or src)   -- replies only: the answer stays visible
         return true
     end)
+    comms_replenish_reply(t, src, commsTampere_replies)
 end
 
 function deliver_to_lumina(ship)
@@ -1015,9 +1193,9 @@ end
 
 function commsTurku(t, src)
     setCommsMessage([[Turku 1. We were attacked, so we hid the Intel compute nodes and the Lustre
-fileserver in cargo containers across seven nebulas around us - our courier ship made it that far before
-it was shot down. The containers only say what is inside once you are right next to them; the Kraylor
-left junk decoys behind. LUT 1 has the AMD nodes, if they are still ours to ask.]])
+fileserver in cargo containers across ]] .. TURKU_NEB .. [[ nebulas around us - our courier ship made it
+that far before it was shot down. The containers only say what is inside once you are right next to
+them; the Kraylor left junk decoys behind. LUT 1 has the AMD nodes, if they are still ours to ask.]])
     commsTurku_replies(t, src)
     return true
 end
@@ -1029,6 +1207,7 @@ function commsTurku_replies(t, src)
         commsTurku_replies(t, comms_source or src)   -- replies only: the tip stays visible
         return true
     end)
+    comms_replenish_reply(t, src, commsTurku_replies)
 end
 
 function commsLUT(t, src)
@@ -1062,6 +1241,7 @@ function commsLUT_replies(t, src)
         commsLUT_replies(t, comms_source or src)   -- replies only: the result stays visible
         return true
     end)
+    comms_replenish_reply(t, src, commsLUT_replies)
 end
 
 function commsTransport(t, src)
@@ -1106,14 +1286,108 @@ end
 
 -- ========================= event callbacks =========================
 function b300_died(ship, instigator)
-    if part_delivered_count({ "B300 GPU nodes" }) > 0 then return end
-    if parts["B300 GPU nodes"] and parts["B300 GPU nodes"].obj then return end
+    -- The last killer is not necessarily an active player (autopilot ships and
+    -- turrets also count as instigator), and a player may have already jumped
+    -- out; always credit the whole crew with a broadcast.
+    -- NOTE: the object being destroyed can still read isValid() inside its own
+    -- hook, so "was that the last one?" has to skip the ship argument itself.
     for _, s in ipairs(groups.b300) do
-        if s:isValid() then return end
+        if s ~= ship and s:isValid() then return end
     end
-    local x, y = ship.lc_x or 0, ship.lc_y or 0
+    drop_b300(obj_field(ship, "lc_x", 0), obj_field(ship, "lc_y", 0))
+end
+
+-- ========================= drop watchdogs =========================
+-- A container only ever appears from a destruction hook, and onDestruction
+-- fires ONLY on damage kills (takeHullDamage): a script destroy(), a GM removal
+-- or a collision-only death drops nothing and the mission becomes unsolvable.
+-- So the hooks are a fast path and the truth is polled here - the same idiom
+-- the DSL twin uses with gen_watch_b300 (notes/05 GAP-3 / GAP-12).
+drop_watches = {}
+
+-- Poll `group` and hand the last known position to on_drop(x, y) once the whole
+-- group is gone and the part is still unaccounted for. `grace` gives the real
+-- destruction hook time to do its job first.
+function mk_drop_watch(part_name, group, on_drop, grace)
+    local w = { part = part_name, group = group, on_drop = on_drop,
+                grace = grace or 10, drops = 0, done = false }
+    table.insert(drop_watches, w)
+    return w
+end
+
+-- Is this part already handled: delivered, in a cargo bay, or a crate that
+-- still exists? (A crate that was blown up before anyone reached it is not.)
+function part_accounted(name)
+    local info = parts[name]
+    if info == nil then return false end
+    if info.delivered or info.carried then return true end
+    if info.obj == nil then return false end
+    local ok, valid = pcall(function() return info.obj:isValid() end)
+    if ok == false or valid then return true end
+    return false
+end
+
+function drop_watch(delta)
+    for _, w in ipairs(drop_watches) do drop_watch_run(w) end
+    drop_watch_books()
+end
+
+function drop_watch_run(w)
+    if w.done then return end
+    for _, s in ipairs(w.group) do
+        if s:isValid() then
+            w.x, w.y = s:getPosition()
+            w.alive_at = clock
+            return
+        end
+    end
+    if part_accounted(w.part) then return end
+    if w.alive_at == nil then w.alive_at = clock end
+    if clock - w.alive_at < w.grace then return end
+    w.drops = w.drops + 1
+    if w.drops >= 2 then w.done = true end   -- never spam crates every tick
+    w.on_drop(w.x or 0, w.y or 0)
+    print("LC: drop watchdog fired for " .. w.part)
+end
+
+function drop_b300(x, y)
+    if part_accounted("B300 GPU nodes") then return end
     mk_part("B300 GPU nodes", x, y)
     lc_notify("The Kraylor patrol in C10 is destroyed. Debris includes a cluster component container - the B300 GPU nodes.")
+end
+
+-- Playbooks ride on merchant hulls that are meant to respawn 30 s after a loss;
+-- if the death hook never ran, neither the spill nor the respawn happens and
+-- the playbook is unreachable forever. So keep a script-side mirror of every
+-- freighter slot (position, call sign, booked cargo, time of death) that
+-- survives the hull, and drive both the spill and the respawn from it.
+transport_pos = {}
+
+function drop_watch_books()
+    for i, t in ipairs(transports) do
+        local st = transport_pos[i]
+        if t:isValid() then
+            st = st or {}
+            st.x, st.y = t:getPosition()
+            st.sign = t:getCallSign()
+            st.book = obj_field(t, "lc_book", nil)
+            st.dead_at = nil
+            transport_pos[i] = st
+        else
+            st = st or {}
+            transport_pos[i] = st
+            st.dead_at = st.dead_at or clock
+            local info = st.book and parts[st.book]
+            if info ~= nil and not info.given and not info.delivered and not info.carried then
+                if clock - st.dead_at >= 10 then
+                    info.given = true
+                    mk_part(st.book, st.x or 0, st.y or 0)
+                    lc_notify("A freighter carrying an Ansible Playbook was lost - " .. st.book ..
+                        " is adrift near sector " .. getSectorName(st.x or 0, st.y or 0) .. ".")
+                end
+            end
+        end
+    end
 end
 
 -- ========================= update & triggers =========================
@@ -1149,11 +1423,11 @@ function update(delta)
 
     -- Cargo containers reveal their shipping labels at close range: the
     -- engine never advances an Artifact's scan state, so we flip every
-    -- description (base + all scan states) once a player is within 5u.
+    -- description (base + all scan states) once a player is within range.
     for _, c in ipairs(containers) do
         if not c.revealed and c.a:isValid() then
             for _, p in ipairs(players) do
-                if d2(p, c.a) < U(5) ^ 2 then
+                if d2(p, c.a) < U(LC_REVEAL_U) ^ 2 then
                     lc_reveal_container(c)
                     break
                 end
@@ -1161,18 +1435,21 @@ function update(delta)
         end
     end
 
-    -- Discovery of the hidden stations.
+    -- Discovery of the hidden stations: neutral -> ours, and the relay telemetry
+    -- bubble comes back up (station_reveal is idempotent).
     for _, name in ipairs({ "tampere", "turku", "lut" }) do
         if not found[name] then
             for _, p in ipairs(players) do
-                if d2(p, stations[name]) < U(40) ^ 2 then
-                    found[name] = true
-                    print("LC: station " .. name .. " found")
+                if d2(p, stations[name]) < U(LC_FIND_U) ^ 2 then
+                    station_reveal(name)
                     break
                 end
             end
         end
     end
+
+    -- Container-drop safety net (hookless deaths must not softlock the mission).
+    drop_watch(delta)
 
     -- Tampere 1: ambush on first approach.
     if tampere_state == "waiting" then
@@ -1357,6 +1634,12 @@ function update_transports(delta)
             end
         elseif t.lc_respawn_at and clock >= t.lc_respawn_at then
             transports[i] = mk_transport_like(t)
+        elseif transport_pos[i] and transport_pos[i].dead_at
+               and clock - transport_pos[i].dead_at >= 30 then
+            -- Death hook never ran (script destroy / GM removal): respawn from
+            -- the script-side mirror, which still knows the call sign.
+            transports[i] = mk_transport_like({ lc_sign = transport_pos[i].sign or "Freighter ?" })
+            print("LC: freighter respawn watchdog fired (destruction hook missed)")
         end
     end
     for _, slot in ipairs(guard_slots) do
@@ -1574,3 +1857,100 @@ function part_out_there(name)
     if info.delivered or info.carried then return true end
     return info.obj ~= nil and info.obj:isValid()
 end
+
+-- Visibility contract: a hidden station must not be Human Navy (friendly
+-- contacts are shared over relay telemetry no matter what nebula hides them).
+function probe_hidden()
+    for _, name in ipairs({ "tampere", "turku", "lut" }) do
+        local st = stations[name]
+        print("LC-PROBE station " .. name .. " faction=" .. st:getFaction() ..
+            " found=" .. tostring(found[name] == true) ..
+            " revealed=" .. tostring(st.lc_revealed == true))
+    end
+    return stations.tampere:getFaction() ~= "Human Navy"
+end
+
+-- Is a container for this part actually in the world (the anti-softlock
+-- question the destruction hooks alone cannot answer)?
+function probe_dropped(name)
+    local info = parts[tostring(name)]
+    local exists = info ~= nil and info.obj ~= nil and info.obj:isValid()
+    print("LC-PROBE part " .. tostring(name) .. " container=" .. tostring(exists) ..
+        " delivered=" .. tostring(info and info.delivered == true) ..
+        " carried=" .. tostring(info ~= nil and info.carried and true or false) ..
+        " sector=" .. tostring(info and info.drop_sector))
+    return exists
+end
+
+-- Hand-over range gate: throwaway carrier at `dist` units from Lumina 1
+-- ("near" = just inside the bubble, "far" = well outside it).
+function probe_handover(mode)
+    local st = stations.lumina
+    if st == nil or not st:isValid() then print("LC-PROBE no Lumina") return false end
+    local info = parts["H200 GPU nodes"]
+    if info == nil then print("LC-PROBE no H200 part record") return false end
+    local p = CpuShip():setTemplate("Atlantis"):setFaction("Human Navy")
+    local x, y = st:getPosition()
+    local d = 20
+    if mode == "near" then d = handover_u(st) * 0.8 end
+    p:setPosition(x + U(d), y)
+    local save_c, save_d = info.carried, info.delivered
+    local save_hint, save_known, save_phase = infini_hint_given, known.infini, phase
+    info.carried, info.delivered = p, false
+    local msg = act_deliver(st, p)
+    local accepted = info.delivered == true
+    info.carried, info.delivered = save_c, save_d
+    infini_hint_given, known.infini, phase = save_hint, save_known, save_phase
+    p:destroy()
+    print("LC-PROBE handover " .. tostring(mode) .. " dist=" .. string.format("%.1f", d) ..
+        "u accepted=" .. tostring(accepted) .. " msg=" .. msg)
+    return accepted
+end
+
+-- Turku 1 nebula ring: count and how far out it reaches.
+function probe_turku_field()
+    if turku_nebs == nil then print("LC-PROBE turku field not built") return false end
+    local x, y = stations.turku:getPosition()
+    local n, far = 0, 0
+    for _, nb in ipairs(turku_nebs) do
+        n = n + 1
+        local d = math.sqrt((nb.x - x) ^ 2 + (nb.y - y) ^ 2) / 1000
+        if d > far then far = d end
+    end
+    print("LC-PROBE turku nebulas=" .. n .. " max_radius_u=" .. string.format("%.1f", far))
+    return n == TURKU_NEB and far <= TURKU_R_MAX + 0.1
+end
+
+-- What does container #i read right now (label-state machine)?
+function probe_container_text(i)
+    local c = containers[tonumber(i) or 0]
+    if c == nil or not c.a:isValid() then print("LC-PROBE no such container") return "" end
+    local t = c.a:getDescription()
+    print("LC-PROBE container " .. tostring(i) .. " junk=" .. tostring(c.junk) ..
+        " revealed=" .. tostring(c.revealed) .. " text=" .. t)
+    return t
+end
+
+-- Station-ejection geometry: eject a part beside a station and report how far
+-- the crate landed from the hull (must be reachable, so <= LC_HANDOVER_U).
+function probe_eject_geometry(part_name, station_name)
+    local st = stations[tostring(station_name)]
+    if st == nil or not st:isValid() then print("LC-PROBE no such station") return false end
+    local info = parts[tostring(part_name)]
+    if info == nil then print("LC-PROBE no such part") return false end
+    local save = info.obj
+    info.obj = nil
+    local x, y = eject_pos(st)
+    local probe_a = mk_part(tostring(part_name), x, y)
+    local sx, sy = st:getPosition()
+    local d = math.sqrt((x - sx) ^ 2 + (y - sy) ^ 2) / 1000
+    local hull = station_hull_u(st)
+    if probe_a:isValid() then probe_a:destroy() end   -- throwaway crate only
+    info.obj = save
+    if info.cont then info.cont.a = save end
+    print("LC-PROBE eject " .. tostring(part_name) .. " at " .. string.format("%.2f", d) ..
+        "u from " .. tostring(station_name) .. " (hull " .. string.format("%.2f", hull) ..
+        "u, hand-over " .. string.format("%.2f", handover_u(st)) .. "u)")
+    return d > hull and d <= handover_u(st)
+end
+

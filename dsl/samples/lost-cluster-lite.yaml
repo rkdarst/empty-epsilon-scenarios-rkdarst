@@ -67,10 +67,16 @@ world:
       position: [0, 10000]
       comms: lumina
     tampere:                     # GAP-4: no `hidden: nebula` (radar shadow
-      system: deep               # until found) — LC does it with Nebula()
-      faction: Human Navy        # + a found[] watcher. Here the station
-      position: [150000, 20000]  # is simply visible.
-      comms: tampere
+      system: deep               # until found). And a nebula alone would NOT
+      faction: Human Navy        # work: same-faction objects are listed for
+      position: [150000, 20000]  # the players at any range via shared
+      comms: tampere             # telemetry (notes/06). The twin therefore
+      # hidden: nebula           # spawns Tampere 1 Independent + one Nebula at
+      # GAP-4 v0.2 shape: `hidden: nebula` -> generator emits a neutral
+      # transponder at spawn and a found-watcher that flips the faction and
+      # restores the radar range at in_range(player, tampere, 6000). See
+      # gen_hide_station()/gen_watch_hidden() in scripts: below.
+      # (visible here only because v0.1 cannot say it.)
     kajaani:
       system: deep
       faction: Human Navy
@@ -82,13 +88,23 @@ items:
     label: H200 GPU nodes
     instance: one_of
     spawn_as: teleport_object    # hand-to-hand give: exists in the buyer's
-  b300:                          # cargo the moment the reply is clicked
+                                 # cargo the moment the reply is clicked
+    # GAP-14: `label` is ONE string. The world needs two: what the crate reads
+    # before anyone scans it ("A vented cargo crate with a scorched, unreadable
+    # label.") and after (label + contents). Artifacts never advance through
+    # the scan states, so the generator keeps the story state itself and flips
+    # base + all three scan-state texts on proximity — see scripts.label_watcher
+    # and notes/06. v0.2: label: {unscanned: ..., scanned: ...}.
+  b300:
     label: B300 GPU nodes
     instance: one_of
     spawn_as: teleport_object
     # GAP-9: no `initial:` placement. The B300 must EXIST in the world
     # before pickup — its drop is a watcher (scripts), and picking up is
     # proximity bookkeeping (GAP-2 + LC-style parts table).
+    # GAP-12: that watcher is NOT the destruction hook: onDestruction only
+    # fires on damage kills, so a hookless death would delete the cargo and
+    # softlock. Poll, with a grace period, and let the hook be a fast path.
 
 flags:                           # (once: flags auto-declared)
   ambush_spawned: false
@@ -103,18 +119,34 @@ dialogs:
       intro:
         text: "Lumina 1 here. Our research cluster was looted - Kajaani 1 was supposed to ship the first batch. Tampere 1 went dark on the deep side. Start with Kajaani."
         replies:
+          # GAP-13: an action has no distance term, but a hand-over is physical.
+          # v0.1 can only express "must be alongside" by DUPLICATING the reply
+          # with complementary when: clauses (in_range takes script units; the
+          # bubble is max(1u, hull+0.4) = 1.4u for this Medium station). v0.2
+          # proposal: `do: take player h200 within 1400 of lumina`.
           - text: "Here's the H200 GPU nodes."
-            when: "has(player, h200)"
+            when: "has(player, h200) and in_range(player, lumina, 1400)"
             do: ["take player h200", "set flags.h200_delivered true",
                  "hint: That's the compute backbone. Anything else?"]
             say: "The H200 nodes! Kajaani will be relieved."
             then: {replies: intro}
+          - text: "Here's the H200 GPU nodes (from out here)."
+            when: "has(player, h200) and not in_range(player, lumina, 1400)"
+            say: "Too far to transfer anything - come alongside us (within 1.4 units) or dock."
+            then: {replies: intro}
           - text: "We found the B300 nodes too."
-            when: "has(player, b300)"
+            when: "has(player, b300) and in_range(player, lumina, 1400)"
             do: ["take player b300", "set flags.b300_delivered true",
                  "hint: The whole batch is back. Well flown."]
             say: "Recovered! You've put the cluster back together, spacer."
             then: {replies: intro}
+          - text: "We found the B300 nodes too (from out here)."
+            when: "has(player, b300) and not in_range(player, lumina, 1400)"
+            say: "Too far to transfer anything - come alongside us (within 1.4 units) or dock."
+            then: {replies: intro}
+          # GAP-15: no service primitive at all — "stations can refill homing
+          # missiles, free" has to be an installed reply calling gen_replenish()
+          # (scripts: below). v0.2: `services: [replenish(homing, free)]`.
           - {text: "What do you know about the thieves?", to: intel,
              once: told_intel}
           - {say: "Fly safe, spacer - the sector's yours to sweep."}
@@ -128,6 +160,9 @@ dialogs:
       intro:
         text: "Tampere 1... we were boarded. Those ships outside - they've pinned us down."
         replies:
+          # GAP-13 again: `give player h200` is a physical hand-over and the
+          # grammar has no range term; the twin refuses unless the ship is
+          # alongside (in_range(player, tampere, 700) — 0.3u hull + clearance).
           - text: "You're clear now. The H200 nodes?"
             when: "flags.ambush_spawned and n_alive(ambusher) == 0"
             do: ["give player h200",
@@ -189,10 +224,10 @@ outcomes:
     when: "not alive(player)"    # compiles defeat to victory(<enemy faction>)
     text: The recovery fleet lost its only hull. The loot is gone with it.
 
-# ============ watchers the DSL cannot express (GAP-1/2/3/9) ==============
+# ============ watchers the DSL cannot express (GAP-1/2/3/4/9/12/13/14/15) ==
 # Raw Lua, verbatim into the generated file (scripts: passthrough). The
 # helper functions (gen_*) are generator-provided; the WATCHER LOGIC here
-# is what a `watch:`/`on_destroy:` section should own in v0.2.
+# is what a `watch:`/`on_destroy:`/`services:` section should own in v0.2.
 scripts:
   ambush_watcher: |
     function gen_watch_ambush(delta)
@@ -211,14 +246,24 @@ scripts:
         end
     end
   b300_watcher: |
+    gen.b300_spot = { x = 140000, y = 20000 }
     function gen_watch_b300(delta)
         math.abs(0)
-        -- GAP-3: LC hooks onDestruction per thief; the DSL has no lifecycle
-        -- hook, so we poll the archetype count and use the tracked death spot.
-        if not gen.flags.b300_dropped and gen_alive("raider") == 0
-           and gen_event_fired("thieves") then
+        -- GAP-3/GAP-12: this must be a POLL, and the poll tracks the drop
+        -- position itself - the on_destroy hook that would have recorded it
+        -- never fires for a hookless (script/GM) death.
+        local alive = 0
+        for _, s in ipairs(E_ARCH.raider.list) do
+            if s:isValid() then
+                gen.b300_spot.x, gen.b300_spot.y = s:getPosition()
+                alive = alive + 1
+            end
+        end
+        if not gen.flags.b300_dropped and alive == 0 and gen_event_fired("thieves") then
             gen.flags.b300_dropped = true
-            gen_spawn_item("b300", gen.lastkill_x, gen.lastkill_y)
+            -- clear of the wormhole mouth, or the drag/teleport loop in
+            -- wormHole.cpp chews the crate into a NaN position
+            gen_spawn_item("b300", gen.b300_spot.x + 3000, gen.b300_spot.y + 3000)
             gen_notify("Debris field by the gate: a GPU crate floats among the wreckage.")
         end
         -- GAP-9: no pickup semantics; proximity bookkeeping stand-in.
@@ -230,4 +275,54 @@ scripts:
                 gen_notify("Cargo bay: the B300 crate is aboard.")
             end
         end
+    end
+  hidden_station: |              # GAP-4 (see stations.tampere): what the
+    function gen_hide_station(st, reveal_to)
+        math.abs(0)              -- generator emits for `hidden: nebula`
+        st.lc_hidden, st.lc_reveal_to = true, reveal_to
+        st:setFaction("Independent")     -- same-faction = always visible!
+        pcall(st.setShortRangeRadarRange, st, 0)
+    end
+    function gen_watch_hidden(delta)
+        math.abs(0)
+        local p = gen_player()
+        if p == nil then return end
+        for _, name in ipairs(gen.hidden_stations) do
+            local st = E[name]
+            if st ~= nil and st:isValid() and not st.lc_revealed
+               and in_range(p, st, 6000) then      -- short-range radar radius
+                st.lc_revealed = true
+                if st.lc_reveal_to then st:setFaction(st.lc_reveal_to) end
+                pcall(st.setShortRangeRadarRange, st, 5000)
+                gen.flags[name .. "_found"] = true
+            end
+        end
+    end
+  label_watcher: |               # GAP-14: two-state item labels
+    function gen_watch_labels(delta)
+        math.abs(0)
+        local p = gen_player()
+        if p == nil then return end
+        for _, it in pairs(ITEMS) do
+            if it.obj ~= nil and it.obj:isValid() and not it.revealed
+               and in_range(p, it.obj, 5000) then
+                it.revealed = true                 -- write base + ALL scan
+                gen_item_text(it.obj, "A cargo crate holding " .. it.label .. ".")
+            end                              -- states: artifacts have no
+        end                                  -- scan-state progression
+    end
+  station_services: |            # GAP-15: no restock/service primitive
+    function gen_replenish(station, ship)
+        math.abs(0)
+        if ship == nil then return "We cannot service a ship we cannot see." end
+        if not gen_near_or_docked(ship, station) then    -- GAP-13 again
+            return "Pull alongside us, or dock, and we will load you up."
+        end
+        local mx, cur = 0, 0
+        pcall(function() mx = ship:getWeaponStorageMax("Homing") or 0 end)
+        if mx <= 0 then return "We would, but your hull has no homing tubes fitted." end
+        pcall(function() cur = ship:getWeaponStorage("Homing") or 0 end)
+        if cur >= mx then return "Your homing racks are already full." end
+        ship:setWeaponStorage("Homing", mx)   -- the whole "shop": one call
+        return "Loaded homing missiles, no charge - that is all we can spare."
     end

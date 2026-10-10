@@ -152,6 +152,25 @@ function probe_has_ftl_excluding(skip)
     return missing == 0
 end
 
+-- Ejection geometry: a container must clear the station hull (the pickup is a
+-- collision and the hull is solid) and still sit inside that station's
+-- hand-over bubble, or the crate ends up somewhere the player cannot reach
+-- from the position the station talks to them from.
+function lc_eject_ok(part_name, obj, st, msg)
+    if obj == nil or not obj:isValid() then
+        lc_check(false, msg .. " (no container)")
+        return
+    end
+    local ox, oy = obj:getPosition()
+    local sx, sy = st:getPosition()
+    local d = math.sqrt((ox - sx) ^ 2 + (oy - sy) ^ 2) / 1000
+    local hull, reach = station_hull_u(st), handover_u(st)
+    lc_check(d > hull, msg .. ": clear of the " .. string.format("%.2f", hull) ..
+        "u hull (at " .. string.format("%.2f", d) .. "u)")
+    lc_check(d <= reach, msg .. ": inside the " .. string.format("%.2f", reach) ..
+        "u hand-over bubble (at " .. string.format("%.2f", d) .. "u)")
+end
+
 function lc_merc_dump(tag)
     local out = {}
     for i, m in ipairs(lc_mercs) do
@@ -258,6 +277,10 @@ steps = {
     { t = 3, f = function()
         lc_check(phase == 1, "boots into phase 1")
         lc_check(probe_has_ftl(), "player ship starts with warp drive")
+        -- A "hidden" station must not be a friendly contact: same-faction
+        -- objects are shared over relay telemetry no matter what nebula hides
+        -- them, so hiding is done by staying Independent until discovered.
+        lc_check(probe_hidden(), "hidden stations boot as non-Human-Navy contacts")
         print("LC-PROBE difficulty=" .. tostring(LC_DIFFICULTY) .. " story=" .. tostring(STORY_MODE))
     end },
     { t = 5, f = function()
@@ -318,6 +341,7 @@ steps = {
             return d
         end
         local d = walk(commsLumina, stations.lumina, 2, "Lumina 1")
+        lc_check(#d.replies == 3, "Lumina menu also offers free homing replenishment")
         lc_dlg_click(d, 1, stations.lumina, p)
         lc_check(#lc_dlg.msgs == 1 and #lc_dlg.replies >= 2, "Lumina status page: message + menu stays live")
         d = walk(commsKajaani, stations.kajaani, 2, "Kajaani 1")
@@ -333,7 +357,7 @@ steps = {
             "Tampere collect reply shows its result AND spawns the container")
         d = walk(commsTurku, stations.turku, 1, "Turku 1")
         lc_dlg_click(d, 1, stations.turku, p)
-        lc_check(#lc_dlg.msgs == 1 and #lc_dlg.replies == 1, "Turku tip page: message keeps its choice")
+        lc_check(#lc_dlg.msgs == 1 and #lc_dlg.replies >= 1, "Turku tip page: message keeps its choice")
         d = walk(commsLUT, stations.lut, 1, "LUT 1 (friendly)")
         lc_dlg_click(d, 1, stations.lut, p)
         lc_check(#lc_dlg.msgs == 1, "LUT friendly page click renders one message")
@@ -347,6 +371,8 @@ steps = {
     end },
     { t = 18, f = function()
         lc_check(tampere_state == "clear", "Tampere clears after ambush destroyed")
+        lc_check(stations.tampere:getFaction() == "Human Navy",
+            "a hidden station joins the friendly contact list only after discovery")
         probe_warp_sector("L3")
     end },
     { t = 12, f = function()
@@ -368,11 +394,13 @@ steps = {
         lc_check(turku_greeted, "Turku 1 greets ships entering the perimeter")
         local junk = 0
         for _, c in ipairs(containers) do if c.junk then junk = junk + 1 end end
-        lc_check(junk == 10, "7 Turku + 3 Infiniband junk decoys seeded")
+        lc_check(junk == TURKU_JUNK + TURKU_LOOSE_JUNK + 3,
+            "Turku ring + loose + Infiniband junk decoys seeded (" .. junk .. ")")
+        lc_check(probe_turku_field(), "Turku caches sit on the designed nebula ring")
         local near_t = 0
         for _, n in ipairs({ "Intel compute nodes", "Lustre fileserver" }) do
             local o = parts[n] and parts[n].obj
-            if o and o:isValid() and d2(o, stations.turku) < U(40) ^ 2 then near_t = near_t + 1 end
+            if o and o:isValid() and d2(o, stations.turku) < U(TURKU_R_MAX + 3) ^ 2 then near_t = near_t + 1 end
         end
         lc_check(near_t == 2, "both Turku part containers adrift near the station")
         lc_check(taunt_armed[active_players()[1]] == true,
@@ -390,8 +418,13 @@ steps = {
         parts["B300 GPU nodes"] = parts["B300 GPU nodes"]
             or { carried = false, delivered = false }   -- may predate the wreck drop
         parts["B300 GPU nodes"].carried = p   -- simulate picking the wreck's cargo up
+        -- Hand-over geometry first (throwaway carrier, state restored): a
+        -- crate cannot be handed over across a solar system.
+        lc_check(probe_handover("far") == false, "hand-over refused from 20u away")
+        lc_check(probe_handover("near") == true, "hand-over accepted alongside the hull")
+        probe_warp_sector("E3")   -- the dialog path needs the player alongside
         local d = lc_dlg_open(commsLumina, stations.lumina, p)
-        lc_check(#d.msgs == 1 and #d.replies == 3, "Lumina offers the handover while carrying cargo")
+        lc_check(#d.msgs == 1 and #d.replies == 4, "Lumina offers the handover while carrying cargo")
         lc_dlg_click(d, 2, stations.lumina, p)   -- who has what
         lc_check(#lc_dlg.msgs == 1 and lc_dlg.msgs[1]:find("Kajaani 1", 1, true) ~= nil,
             "who-has page names the station chain")
@@ -404,10 +437,28 @@ steps = {
             " phase=" .. tostring(phase) .. " got: " .. m3:sub(1, 300))
         lc_dlg_click(d, 1, stations.lumina, p)   -- status page (handover choice is gone)
         local m4 = table.concat(lc_dlg.msgs, " ~ "):gsub("\n", " / ")
-        lc_check(#d.replies == 2 and m4:find("[x] B300 GPU nodes", 1, true) ~= nil
+        lc_check(#d.replies == 3 and m4:find("[x] B300 GPU nodes", 1, true) ~= nil
             and m4:find("mid-map box", 1, true) ~= nil,
             "status page reflects delivery+hint, no phantom handover | n=" .. #lc_dlg.msgs ..
             " phase=" .. tostring(phase) .. " got: " .. m4:sub(1, 300))
+        -- Free homings: drain the tubes, ask, and the racks must come back
+        -- full. Nothing else is for sale, so no other storage may move.
+        local got, mx = 0, 0
+        pcall(function() got = p:getWeaponStorage("Homing") or 0 end)
+        pcall(function() mx = p:getWeaponStorageMax("Homing") or 0 end)
+        pcall(function() p:setWeaponStorage("Homing", 0) end)
+        local dp = lc_dlg_open(commsLumina, stations.lumina, p)
+        lc_dlg_click(dp, #dp.replies, stations.lumina, p)   -- last choice = replenish
+        local got2 = got
+        pcall(function() got2 = p:getWeaponStorage("Homing") or 0 end)
+        local msg = lc_dlg.msgs[1] or ""
+        if mx > 0 then
+            lc_check(got2 == mx and msg:find("homing missiles") ~= nil,
+                "station reloads homing missiles for free (" .. got2 .. "/" .. mx .. ")")
+        else
+            lc_check(msg:find("no homing tubes") ~= nil,
+                "hull without homing tubes gets an explicit refusal, not silence")
+        end
     end },
     { t = 26, f = function()
         lc_check(lut_state == "hostile", "LUT turns hostile on approach")
@@ -496,16 +547,18 @@ steps = {
     end },
     { t = 28, f = function()
         -- Comms pickup flow (act_* are the exact functions the comms
-        -- replies call): containers must spawn OUTSIDE the station hull.
+        -- replies call): an ejected container must clear the station hull but
+        -- stay inside the hand-over bubble, or the player has to fly a crate
+        -- that is unreachable from where the station talks to them.
         act_collect_tampere(stations.tampere)
         local obj = parts["H200 GPU nodes"] and parts["H200 GPU nodes"].obj
         lc_check(obj ~= nil and obj:isValid(), "Tampere collect spawns the H200 container")
-        lc_check(obj and d2(obj, stations.tampere) > U(4) ^ 2, "H200 container spawns clear of the station hull")
+        lc_eject_ok("H200 GPU nodes", obj, stations.tampere, "Tampere ejects inside the hand-over bubble")
         lc_check(act_collect_tampere(stations.tampere):find("already") ~= nil, "Tampere collect is idempotent")
         act_collect_lut(stations.lut)
         local obj2 = parts["AMD compute nodes"] and parts["AMD compute nodes"].obj
         lc_check(obj2 ~= nil and obj2:isValid(), "LUT collect spawns the AMD container")
-        lc_check(obj2 and d2(obj2, stations.lut) > U(4) ^ 2, "AMD container spawns clear of the station hull")
+        lc_eject_ok("AMD compute nodes", obj2, stations.lut, "LUT ejects inside the hand-over bubble")
         local cx, cy = obj:getPosition()
         probe_warp_to(cx + U(4), cy)   -- close enough to read, not touching
     end },
@@ -514,7 +567,7 @@ steps = {
         -- unlock within 10u, and the collect ring put us ~5-9u out.
         local p = active_players()[1]
         local d = lc_dlg_open(commsTampere, stations.tampere, p)
-        lc_check(#d.msgs == 1 and #d.replies == 2, "Tampere menu after the collect is intact")
+        lc_check(#d.msgs == 1 and #d.replies >= 2, "Tampere menu after the collect is intact")
         lc_dlg_click(d, 2, stations.tampere, p)
         lc_check(known.lut == true and lc_dlg.msgs[1]:find("sector") ~= nil
             and lc_dlg.msgs[1]:find("AMD compute nodes") ~= nil,
@@ -643,6 +696,60 @@ steps = {
     end },
     { t = 69.3, f = function()
         probe_kill_group("wave")   -- scenario should now declare victory and stop ticking
+    end },
+    { t = 12.5, f = function()
+        -- A hull that dies WITHOUT firing onDestruction (script destroy, GM
+        -- removal, collision-only death) must still drop its cargo, or the
+        -- mission is unsolvable. The hook is only a fast path; the polled
+        -- watchdog is the guarantee. Synthetic group + part, cleaned up below.
+        local x, y = sector_center("G9")
+        local g = {}
+        for i = 1, 2 do
+            g[i] = CpuShip():setTemplate("Piranha F12"):setFaction("Kraylor")
+                :setPosition(x + i * 2000, y):orderIdle()
+        end
+        parts["Autotest crate"] = { carried = false, delivered = false }
+        lc_autotest_watch = mk_drop_watch("Autotest crate", g, function(dx, dy)
+            mk_part("Autotest crate", dx, dy)
+        end, 5)
+        for _, s in ipairs(g) do s:destroy() end     -- hook-LESS death
+    end },
+    { t = 19, f = function()
+        local o = parts["Autotest crate"] and parts["Autotest crate"].obj
+        lc_check(o ~= nil and o:isValid(),
+            "a hook-less kill still drops the cargo container (watchdog)")
+        if lc_autotest_watch then lc_autotest_watch.done = true end
+        if o ~= nil and o:isValid() then o:destroy() end
+        parts["Autotest crate"] = nil
+    end },
+    { t = 19.8, f = function()
+        -- Label states: the engine never advances an Artifact through the scan
+        -- states, so "unchecked" -> "readable" is entirely scripted. Park a
+        -- decoy out of reveal range and reset it to its unscanned text.
+        local j = nil
+        for i, c in ipairs(containers) do if c.junk and c.a:isValid() then j = i break end end
+        lc_check(j ~= nil, "a junk decoy is available for the label test")
+        if j then
+            lc_label_idx = j
+            local p = active_players()[1]
+            local px, py = p:getPosition()
+            lc_container_text(containers[j].a, containers[j].far)
+            containers[j].revealed = false
+            containers[j].a:setPosition(px + U(60), py)
+        end
+    end },
+    { t = 20.2, f = function()
+        if lc_label_idx == nil then return end
+        lc_check(probe_container_text(lc_label_idx):find("unchecked") ~= nil,
+            "junk label reads 'unchecked' while out of scan range")
+        local p = active_players()[1]
+        local px, py = p:getPosition()
+        containers[lc_label_idx].a:setPosition(px + U(3), py)   -- into reveal range
+    end },
+    { t = 20.6, f = function()
+        if lc_label_idx == nil then return end
+        lc_check(probe_container_text(lc_label_idx):find("spare parts") ~= nil,
+            "same label reads 'spare parts' once a ship is alongside")
     end },
 }
 

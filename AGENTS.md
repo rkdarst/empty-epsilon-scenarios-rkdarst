@@ -26,6 +26,13 @@ an open-source multiplayer spaceship bridge simulator.
 5. The authoritative API reference is `script_reference.html` inside the
    downloaded release in `vendor/` (version-specific!). Online copy of the
    current build: <http://daid.eu/dump/script_reference.html>.
+6. Before inventing a "the players must not see this yet" / "this must
+   always drop" mechanic, read
+   [notes/06-sensors-visibility-geometry.md](notes/06-sensors-visibility-geometry.md):
+   same-faction objects are always visible (nebulae only shadow the
+   long-range radar), `onDestruction` fires only on damage kills, artifacts
+   never advance scan states, and station hull radii set what "alongside"
+   and "ejected clear" mean in units.
 
 ## Repository layout
 

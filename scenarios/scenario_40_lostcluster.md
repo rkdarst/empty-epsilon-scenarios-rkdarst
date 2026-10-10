@@ -49,6 +49,15 @@ the station will be within 50u of that point (not exact locations) where
 they might be and the players have to explore, including inside some
 nebulas.
 
+The three lost stations (Tampere 1, Turku 1, LUT 1) really are lost to
+the fleet’s sensor net: they sit inside a nebula *and* are flying under
+an Independent transponder, because a Human Navy object is listed for the
+players at any distance — same-faction units share telemetry, and a
+nebula only blinds the 30u long-range sweep, never the 5u short-range
+one.  A station stops hiding when a player ship comes within 6u (which is
+where it would appear on short-range sensors anyway) and then joins the
+friendly contact list.  See notes/06.
+
 When Tampere 1 is hailed from afar, they say they have the H200 GPU
 nodes.  When approaching Tampere 1, three relative weak enemy ships
 appear and have to be fought off.  If you try to hail Tampere, they will
@@ -77,12 +86,17 @@ the AMD compute nodes.
 When approaching station Turku 1, they say that they have been attacked
 and they have hidden the data in several nearby nebulas, but the ship
 doing the hiding got destroyed on the way back.  So, you have to go
-search those nebulas to find the data.  There are seven nebulas randomly
-placed nearby (same and adjoining sectors) and the Intel compute nodes
-and Lustre fileservers are randomly hidden in two different of the
-nebulas.  These components appear as cargo containers or similar; their
-shipping labels can only be read up close (fly within 5u).  There are
-some decoy containers with junk in and around the nebulas.
+search those nebulas to find the data.  There are ten nebulas scattered
+on a ring 10-18u around the station — a nebula has a 5u radius, so the
+ring spacing keeps them as ten distinguishable clouds, and the whole
+search stays within one sector instead of turning into a scavenger hunt
+two sectors away.  The Intel compute nodes and Lustre fileservers
+are randomly hidden in two different of the nebulas.  These components
+appear as cargo containers or similar; their shipping labels can only be
+read up close (fly within 5u) — until then a container just reads “An
+unmarked cargo container.” and a decoy reads “Junk (unchecked).”.  There
+are six decoy containers in the remaining nebulas plus two loose ones
+nearby.
 
 When someone returns to station Lumina 1 with cluster components and
 hail it, you can give them the objects you found.  Lumina 1 then says
@@ -182,10 +196,12 @@ state (every generator scales from it):
 - **Traffic** — `traders` extra Independent freighters roaming the box
   (Neutral to both sides, like the init shuttles).
 - **Wormhole pair** — `wormholes = true` puts two mouths in far corners
-  of the box, 12u+ from any station. The engine teleports anything that
-  reaches a mouth's center to `setTargetPosition` ±0.5u with *no
-  re-entry cooldown*, so pointing each mouth at the other's center would
-  perma-loop the traveler: instead each exit sits **3.5U beyond the
+  of the box, 12u+ from any station (their offset exits too: the pair is
+  placed by rejection sampling, so an ambient pair is always seeded and
+  is never parked on a station keep-out ring). The engine teleports
+  anything that reaches a mouth's center to `setTargetPosition` ±0.5u with
+  *no re-entry cooldown*, so pointing each mouth at the other's center
+  would perma-loop the traveler: instead each exit sits **3.5U beyond the
   partner mouth**, outside its 2.5U gravity pull. An `onTeleportation`
   guard additionally ejects any ship that transits twice within 15 s to
   2U further out (speedy exits aimed at the far mouth can't bounce).
@@ -217,15 +233,28 @@ autotest asserts the census and the mine keep-out.
   player ships offer “We would like to transfer \[object\] to you.”
   Civilian freighters must first be hailed with “Please stop for a data
   transfer” before they accept the alongside transfer.
-- To turn in an object to Lumina 1, one must hail it and an option will
-  be to hand over the cargo.
+- To turn in an object to a station, one must hail it and an option will
+  be to hand over the cargo — but the transfer is a physical act: the
+  ship has to be alongside (within 1u of a Small station, 1.4u of the
+  Medium Lumina 1) or docked.  Hailing from farther away keeps the option
+  visible and answers with the distance to close instead of silently
+  accepting cargo from the other side of the map.
+- Our stations can top up **homing missiles, free of charge** (“Replenish
+  our homing missiles.”); that is all they hand out — no other weapon, no
+  hull repairs, no credits.  A hull with no homing tubes is told so.
 - Stations can be hailed from anywhere, if it is visible.  Some are not
   immediately visible until they are found.
 - Friendly stations, civilian ships, and anything required for victory
   should not be destroyable and enemies will not attack them.
 - Non-depending objectives can happen in any order.
 - Undiscovered stations are not hailable until they are found (approach
-  within 5u on the radar).
+  within 6u — the short-range radar radius, since a nebula does not hide
+  a same-faction contact at all; see notes/06).
+- Every cargo drop is doubly guaranteed: the destruction hook plus a
+  polled watchdog (10s grace).  The engine only fires `onDestruction` on
+  damage kills, so a hull removed by script or by the GM would otherwise
+  take its cargo out of the game and lock the scenario.  A freighter that
+  dies that way also still spills its playbook and still gets replaced.
 
 
 ---
@@ -270,7 +299,7 @@ civilian freighter = Atlantis.
 | Group | Where / when | Composition (default) | Behaviour |
 |---|---|---|---|
 | Tampere ambush | Warps in when a player first comes within 20u of Tampere 1 | 3 light | Engages within 20u; no respawn |
-| B300 pirates | Static in sector C10, patrol loop | 2 medium + 2 light | Holds the area; drops the B300 when killed |
+| B300 pirates | Static in sector C10, patrol loop | 2 medium + 2 light | Holds the area; the B300 crate is guaranteed to appear when the patrol is gone (destruction hook + 10s polled watchdog, so a hookless death cannot lock the mission) |
 | LUT garrison | Warps in when a player first approaches LUT 1 | 3x player ship count (min 2), medium | Never farther than 1 sector (20u) from LUT 1 |
 | Central traffic | Rows E-J x columns 6-15 | Static friendly + hostile patrol routes | Aggressive within 8u, otherwise ignores players |
 | Playbook guards (Phase 2) | Near playbook-carrying transports | 2 light per guarded transport | One respawns 60s after destruction, max 2 re-spawns; stop after that transport's playbook is delivered |
@@ -278,9 +307,18 @@ civilian freighter = Atlantis.
 
 ### Counts, timers, and triggers
 
-- Turku search: 7 nebulas (5u radius); Intel and Lustre in 2 random
-  different nebulas; 4 decoys in the remaining nebulas + 3 loose nearby.
-  Decoys scan as "junk (spare parts)".
+- Turku search: 10 nebulas (`TURKU_NEB`, each 5u radius) on a ring
+  10-18u from the station (`TURKU_R_MIN`/`TURKU_R_MAX`), bearings evenly
+  spaced with ±10° jitter; Intel and Lustre in 2 random different
+  nebulas; 6 decoys in the remaining nebulas (`TURKU_JUNK`) + 2 loose
+  (`TURKU_LOOSE_JUNK`, within `TURKU_LOOSE_SPREAD_U = 12`u).
+  Decoys read "Junk (unchecked)." until someone is within 5u, then
+  "Junk (spare parts)."
+- Sensor and geometry knobs (top of the Lua): `LC_FIND_U = 6` (hidden
+  stations reveal), `LC_REVEAL_U = 5` (shipping labels become readable),
+  `LC_HANDOVER_U = 1` (minimum hand-over/replenish distance; grows with
+  the station hull via `handover_u()`), `STATION_HULL_U` (from
+  `model_data.lua`), crates eject at `hull + 0.35`u.
 - Infiniband search area: rows A-E x columns 8-13 (the mid-map 5-sector
   box); the switches are one artifact hidden in a nebula/field inside it.
 - Phase 2: 10 transports shuttle between the 5 stations; exactly 3 of
@@ -307,14 +345,28 @@ civilian freighter = Atlantis.
   through them; artifacts are "created fully scanned"), so containers
   show generic descriptions in *all* scan states and the script flips
   base + every scan-state description once a player ship comes within
-  5u ("fly close enough to read the shipping label"). Decoys always
-  reveal "junk (spare parts)".
+  5u ("fly close enough to read the shipping label"). Decoys are the same
+  state machine: "Junk (unchecked)." out there, "Junk (spare parts)."
+  once someone is close enough to have read the tag.
 - Notification hails are sent by the *speaking* station (Tampere 1
   reports its own clearance, LUT 1 its liberation); only fleet-wide
   intel comes from Lumina 1. Messages are queued and retried while the
   player is inside another comms dialog, so nothing is dropped.
-- Hidden stations = invisible to long-range radar until found (a player
-  within 40u, or revealed by the hint chain).
+- Hidden stations = not on the players' contact list until found. A
+  nebula alone is not enough (it only shadows the 30u long-range sweep,
+  and same-faction objects are listed at any range via shared telemetry),
+  so a hidden station starts `Independent` and is flipped to `Human Navy`
+  by `station_reveal()` once a player is within `LC_FIND_U = 6`u — the
+  radius at which it would show up on short-range sensors anyway. LUT 1
+  keeps its own reveal scene (neutral -> Kraylor), which fires earlier at
+  20u (notes/06).
+- Handing cargo over and getting homing missiles refuelled both require
+  being alongside: `near_or_docked(ship, station, handover_u(station))`,
+  where `handover_u = max(LC_HANDOVER_U, hull + 0.4)` from the station
+  radii in `model_data.lua` (0.3u Small, 1.0u Medium). Ejected crates use
+  the same geometry: `hull + 0.35`u, so a crate can never land inside the
+  hull that just ejected it nor outside the bubble its station talks
+  from.
 - Nebula *display* is asymmetric by engine design, and seeing a nebula
   only on the GM screen is expected, not a bug: the GM view runs with
   `NoFogOfWar` ("everything is deemed visible", `radarView.cpp`), the
@@ -326,8 +378,9 @@ civilian freighter = Atlantis.
   `multiplayer_significant_range` parameter of the `SpaceObject`
   constructor; the GM client receives everything).  Nebulae far from
   any ship therefore appear on station radars only as someone gets
-  close; the same replication + fog model is what makes the hidden
-  stations' radar shadow work in the first place.
+  close; the same replication + fog model is what a hidden station's
+  nebula is supposed to exploit — which is why hiding also needs the
+  neutral transponder (notes/06).
 - "Cannot be destroyed" = respawn guards: protected ships/objects that
   are destroyed re-dock or re-drop on the spot, so the mission can never
   become unwinnable.

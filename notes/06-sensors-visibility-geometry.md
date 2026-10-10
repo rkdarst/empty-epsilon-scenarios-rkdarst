@@ -1,3 +1,9 @@
+> **Status:** promoted into the package as
+> [ee-skills/reference/sensors-and-visibility.md](../ee-skills/reference/sensors-and-visibility.md)
+> and [ee-skills/reference/geometry-and-units.md](../ee-skills/reference/geometry-and-units.md),
+> with recipes in [ee-skills/patterns/](../ee-skills/patterns/). This note stays as
+> the original measurement record (it is where the numbers came from).
+
 # 06 — Sensors, visibility and geometry (engine facts we verify in code)
 
 Everything here was read out of the EE-2024.12.08 source (`src/`) or the
@@ -75,7 +81,7 @@ Therefore any "X drops Y when destroyed" logic must be:
    unaccounted for? then drop it, once, after a grace period").
 
 Keep the drop bookkeeping in script-side tables, not on the dying object:
-custom per-object fields die with it (notes/04).
+custom per-object fields die with it ([04-state-and-driving.md]).
 
 ## Artifacts (cargo containers)
 

@@ -1,0 +1,81 @@
+# Apptainer recipe: a self-contained Debian image that INSTALLS Empty Epsilon.
+# The official deb is copied in and installed with apt, so the image carries
+# its own SDL2/X11/GL stack and needs nothing from the host but a display.
+#
+# Build from the REPO ROOT (the %files path is relative to the build CWD), on
+# a machine that has apptainer (this package never installs it) - or just run
+# ee_play.sh --build, which picks sif vs sandbox for you:
+#   ./ee-skills/bin/ee_get.sh                                # caches the deb
+#   apptainer build vendor/ee.sif ee-skills/bin/ee.def
+#   apptainer build --fakeroot --sandbox vendor/ee-rootfs ee-skills/bin/ee.def
+#       # rootless-friendly form; needed where the kernel has no squashfs
+#       # module (a SIF cannot be mounted then).
+#
+# Play with the host HOME hidden from the game:
+#   ee_play.sh                              # window on $DISPLAY, scenarios in
+#   ee_play.sh headless=scenario_40_lostcluster.lua startpaused=1
+#
+# Home isolation is a RUNTIME policy: always pass --no-home (ideally plus
+# --contain, which also drops the auto-bind of your CWD and the /tmp + /home
+# mounts). ee_play.sh enforces it; the scratch home lives at /opt/eehome (not
+# under /tmp or /home, so --contain cannot hide it).
+#
+# The base rootfs comes from Docker Hub (needs outbound HTTPS to
+# registry-1.docker.io; anonymous pulls are rate-limited, layers are cached
+# under ~/.apptainer/cache). If the build host cannot reach Docker Hub, swap
+# the two Bootstrap lines for:
+#   Bootstrap: debootstrap
+#   MirrorURL: http://deb.debian.org/debian/
+#   OSVersion: stable
+Bootstrap: docker
+From: debian:stable
+
+%labels
+    Method apt-install of the official deb into Debian stable
+
+%help
+    Debian stable with Empty Epsilon installed under /usr/local
+    (binary /usr/local/bin/EmptyEpsilon, data /usr/local/share/emptyepsilon).
+    Scratch home is /opt/eehome; the game reads custom scenarios from
+    /opt/eehome/.emptyepsilon/scripts (bind your scenarios/ dir there
+    read-only - ee_play.sh does that plus --no-home --contain).
+
+%files
+    # adjust the tag if you fetched a different release with ee_get.sh
+    # NB: stage under /opt, NOT /tmp - the build masks /tmp while %post runs,
+    # so a /tmp copy would be invisible to the installer.
+    vendor/Linux_EmptyEpsilon_EE-2024.12.08.deb /opt/emptyepsilon.deb
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    test -f /opt/emptyepsilon.deb || {
+        echo "ee.def: /opt/emptyepsilon.deb missing - run ee_get.sh and build from the repo root" >&2
+        exit 1
+    }
+    apt-get update
+    # the real install; dpkg first, then -f pulls libSDL2 + its X11/ALSA/Pulse
+    # chain from Debian (this combo sidesteps apt's deb-path quirks entirely)
+    dpkg -i /opt/emptyepsilon.deb || apt-get -f install -y
+    # OpenGL: GPU-backed via a /dev/dri bind when available, llvmpipe otherwise
+    apt-get install -y --no-install-recommends \
+        libgl1 libglx0 libglx-mesa0 libgl1-mesa-dri fontconfig fonts-dejavu-core
+    # Debian trixie moved the Gallium drivers into mesa-libgallium; the
+    # "not found" failure on older releases is harmless:
+    apt-get install -y --no-install-recommends mesa-libgallium || true
+    rm -f /opt/emptyepsilon.deb
+    rm -rf /var/lib/apt/lists/* /var/cache/apt
+    mkdir -p /opt/eehome/.emptyepsilon/scripts
+
+%environment
+    export HOME=/opt/eehome
+    export EE_CONF_DIR=/opt/eehome/.emptyepsilon
+
+%runscript
+    # The binary resolves resources/ scripts/ packs/ relative to its CWD
+    # (verified for EE-2024.12.08), so start from the data dir. Custom
+    # scenarios still come from $EE_CONF_DIR/scripts (the fallback path).
+    if [ $# -gt 0 ] && expr "$1" : 'headless=' >/dev/null 2>&1; then
+        export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
+    fi
+    cd /usr/local/share/emptyepsilon
+    exec /usr/local/bin/EmptyEpsilon "$@"

@@ -4,7 +4,7 @@
 --- Phase 1: follow the hint chain (Kajaani 1 -> Tampere 1 / Turku 1 -> LUT 1) and recover all six
 --- cluster components. Phase 2: ten civilian freighters shuttle between the stations - three of
 --- them were handed an Ansible Playbook. Phase 3: the enemy is coming for Lumina 1.
--- Author: scenario-dev (implements scenarios/scenario_40_lostcluster.md)
+-- Author: scenario-dev (implements scenarios/scenario_40_lostcluster.AGENTS-brief.txt)
 -- Type: Mission
 -- Setting[Difficulty]: Mission difficulty.
 -- Difficulty[Normal|Default]: Standard balance.
@@ -1302,7 +1302,7 @@ end
 -- fires ONLY on damage kills (takeHullDamage): a script destroy(), a GM removal
 -- or a collision-only death drops nothing and the mission becomes unsolvable.
 -- So the hooks are a fast path and the truth is polled here - the same idiom
--- the DSL twin uses with gen_watch_b300 (notes/05 GAP-3 / GAP-12).
+-- the DSL twin uses with gen_watch_b300 (dsl/DESIGN.md GAP-3 / GAP-12).
 drop_watches = {}
 
 -- Poll `group` and hand the last known position to on_drop(x, y) once the whole

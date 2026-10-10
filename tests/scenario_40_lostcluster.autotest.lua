@@ -1,6 +1,7 @@
--- lc_autotest.lua: scenario self-driver for headless functional testing.
+-- scenario_40_lostcluster autotest driver: self-driving timeline for headless runs.
 -- tools/func_test.sh concatenates this AFTER a copy of the scenario, so
--- production scenarios need no test hooks at all.
+-- production scenarios need no test hooks at all. Living in tests/ (named after
+-- the scenario) is what makes func_test.sh discover it automatically.
 lc_autotest_ok, lc_autotest_fail = 0, 0
 
 function lc_check(cond, msg)

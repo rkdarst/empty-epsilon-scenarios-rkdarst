@@ -1,9 +1,9 @@
 """Shared grammar for the EE mission DSL (schema v0.1) -- single source of truth.
 
 tools/dsl_check.py imports this today; the Phase-2 generator MUST parse
-through the same module so checker and codegen cannot drift (notes/05).
+through the same module so checker and codegen cannot drift (dsl/DESIGN.md).
 
-Grammar (normative text in notes/05):
+Grammar (normative text in dsl/DESIGN.md):
 
   expr    python-expression-subset over: entity names, `credits`,
           flags.X / options.X / <station>.<field> paths, calls

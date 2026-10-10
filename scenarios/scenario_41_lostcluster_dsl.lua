@@ -2,7 +2,7 @@
 -- Description: A looted research cluster lies scattered across the sector. Trace the hint chain, clear the ambush at Tampere 1, and deliver the recovered hardware to Lumina 1.
 --- Hand-emitted "generator output" for dsl/samples/lost-cluster-lite.yaml
 --- (mission DSL schema v0.1). Purpose: validate the Phase-2 generator
---- contract (notes/05) against the real engine before writing
+--- contract (dsl/DESIGN.md) against the real engine before writing
 --- tools/mission_gen.py. Sections marked "scripts:" are the YAML's
 --- raw-Lua passthrough; everything else shows the expected codegen shape.
 -- Author: mission_gen (hand-emitted draft)

@@ -1,3 +1,11 @@
+> **Status:** superseded for the *how*. The tools moved into
+> [ee-skills/bin/](../ee-skills/bin/) (`ee_get.sh`, `ee_deps.sh`, `ee_smoke.sh`,
+> `ee_func.sh`, `ee_play.sh`, `ee_selftest.sh`) and `tools/*.sh` are now thin
+> wrappers; `tools/ee.def` moved to [ee-skills/bin/ee.def](../ee-skills/bin/ee.def).
+> Runner internals are documented in
+> [ee-skills/testing/runner-anatomy.md](../ee-skills/testing/runner-anatomy.md).
+> This file remains the record of the vendor/boot experiments.
+
 # 02 — Build & test (official release route)
 
 Decision (2026-10): we use the **official release** (no source build), run
@@ -87,7 +95,7 @@ Two runtime gotchas (both verified on this Ubuntu 24.04 box):
 
 ## Apptainer
 
-`tools/ee.def` builds a **Debian stable** image (base rootfs pulled from
+`ee-skills/bin/ee.def` builds a **Debian stable** image (base rootfs pulled from
 Docker Hub as `debian:stable`, so the build host needs registry access —
 the header documents a debootstrap fallback) that *installs* the official
 EE deb with `dpkg -i` + `apt-get -f install -y` (staged at
@@ -101,8 +109,8 @@ Docker Hub layers are cached in `~/.apptainer/cache` after the first pull.
 
 ```sh
 ./tools/get_ee.sh
-apptainer build vendor/ee.sif tools/ee.def                      # as root / --fakeroot
-apptainer build --fakeroot --sandbox vendor/ee-rootfs tools/ee.def  # rootless,
+apptainer build vendor/ee.sif ee-skills/bin/ee.def                      # as root / --fakeroot
+apptainer build --fakeroot --sandbox vendor/ee-rootfs ee-skills/bin/ee.def  # rootless,
                                                                   # no squashfs kernel
 ```
 

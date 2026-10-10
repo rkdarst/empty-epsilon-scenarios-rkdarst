@@ -1,10 +1,10 @@
 -- Tick driver for scenario_41_lostcluster_dsl.lua (mission-DSL twin).
--- Appended by tools/func_test.sh via AUTOTEST=tools/autotest/gen41_autotest.lua:
--- lets update() run live, then asserts the generator tick loop works (events
+-- Discovered automatically by tools/func_test.sh (tests/<scenario>.autotest.lua); override
+-- with AUTOTEST=path/to/driver.lua.
 -- fired, archetype spawn + n_alive tracking, no runtime errors) and that the
 -- twin keeps the same contracts as the hand-written scenario 40: hidden
 -- stations, polled cargo drops, hand-over range, item label states, free
--- homings (notes/06, notes/05 GAP-12..15).
+-- homings (ee-skills/reference/sensors-and-visibility.md, dsl/DESIGN.md GAP-12..15).
 local ticks = 0
 local done41, done41b, done41c = false, false, false
 local a41_ok, a41_fail = 0, 0

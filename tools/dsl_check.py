@@ -4,7 +4,7 @@
 Usage: tools/dsl_check.py dsl/samples/last-mile.yaml
 
 Grammar parsing lives in tools/dsl_lang.py, shared with the Phase-2
-generator (no parser drift, notes/05). Checks: schema keys, entity/
+generator (no parser drift, dsl/DESIGN.md). Checks: schema keys, entity/
 archetype discipline, references, the dialog page/reply contract (incl.
 `once:`), event grammar, tracker targets, and heuristic comms dead-ends.
 Requires PyYAML (./tools/get_pyyaml.sh once on pip-less hosts).
@@ -143,7 +143,7 @@ def check_action(text, path, ctx):
             ctx.err(f"{path}: pay target '{ent}' is not a world object")
         else:
             ctx.warn(f"{path}: station accounts are not modelled; 'pay' moves "
-                     "player credits only (notes/05 limitations)")
+                     "player credits only (dsl/DESIGN.md limitations)")
     elif k == "spawn":
         _, name, sysname, at = args
         if name not in ctx.ships:
@@ -387,7 +387,7 @@ def finish_checks(doc, ctx, meta, world, dialogs):
             ctx.err(f"outcomes.{oname}: when required")
     if ctx.saw_victory_action and "victory" in (doc.get("outcomes") or {}):
         ctx.warn("two victory paths (victory: action + outcomes.victory); "
-                 "the action wins by ending instantly (notes/05)")
+                 "the action wins by ending instantly (dsl/DESIGN.md)")
 
     for sname, body in (doc.get("scripts") or {}).items():
         if not isinstance(body, str):

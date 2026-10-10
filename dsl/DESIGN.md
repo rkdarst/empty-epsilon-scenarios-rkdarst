@@ -142,7 +142,7 @@ scenario 40 into v0.1; where the schema ran out of road it fell down to
 `scripts:` instead of lying. Every gap below is annotated at its use site
 in the YAML, and the twin `scenarios/scenario_41_lostcluster_dsl.lua` is
 the hand-emitted generator output (validated: smoke + live tick driver
-`tools/autotest/gen41_autotest.lua`).
+`tests/scenario_41_lostcluster_dsl.autotest.lua`).
 
 | GAP | Missing feature | v0.2 proposal |
 |---|---|---|
@@ -174,13 +174,13 @@ the enemy faction.
 ```sh
 python3 tools/dsl_check.py dsl/samples/last-mile.yaml   # must print OK
 python3 tools/dsl_check.py dsl/samples/lost-cluster-lite.yaml  # gap stress file
-AUTOTEST=tools/autotest/gen41_autotest.lua RUNTIME=60 \
+AUTOTEST=tests/scenario_41_lostcluster_dsl.autotest.lua RUNTIME=60 \
     tools/func_test.sh scenarios/scenario_41_lostcluster_dsl.lua  # twin must pass
 ```
 
 The twin (`scenario_41_lostcluster_dsl.lua`) is the executable side of the
 experiment: it is what the Phase-2 generator's output should look like, and
-`tools/autotest/gen41_autotest.lua` proves the emitted shapes actually hold
+`tests/scenario_41_lostcluster_dsl.autotest.lua` proves the emitted shapes actually hold
 up live — hidden-station neutrality, polled cargo drops after hookless
 deaths, hand-over range, two-state item labels, free homings.
 

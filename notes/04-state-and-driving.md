@@ -1,3 +1,9 @@
+> **Status:** superseded for the *how*. Driving scenarios from a test harness is
+> now [ee-skills/testing/writing-drivers.md](../ee-skills/testing/writing-drivers.md)
+> and the harness is [ee-skills/lib/autotest.lua](../ee-skills/lib/autotest.lua);
+> the verified facts this note collected live in
+> [ee-skills/reference/](../ee-skills/reference/). Kept as the exploration log.
+
 # 04 — How scenarios run and where state lives
 
 Compiled 2026-10 from a census of the 35 shipped `scenario_*.lua`: the

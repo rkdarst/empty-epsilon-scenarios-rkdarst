@@ -1,3 +1,10 @@
+> **Status:** project note, still accurate. The canonical, task-oriented version of
+> this material is now in the skills package: header grammar in
+> [ee-skills/authoring/HEADER-FORMAT.md](../ee-skills/authoring/HEADER-FORMAT.md),
+> the callback/loading model in
+> [ee-skills/reference/api-and-scripting.md](../ee-skills/reference/api-and-scripting.md).
+> Kept as the detailed source-trace record.
+
 # 01 — Scenario anatomy (verified against `src/scenarioInfo.cpp` @ master)
 
 ## Discovery

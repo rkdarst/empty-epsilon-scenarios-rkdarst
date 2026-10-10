@@ -1,3 +1,12 @@
+================================================================
+ scenario_40_lostcluster - AUTHORING BRIEF (agent context file)
+================================================================
+Read this before touching scenarios/scenario_40_lostcluster.lua.
+Engine facts and recipes referenced here live in ee-skills/ (start:
+ee-skills/AGENTS.md); this file only holds what is specific to Lost
+Cluster - the fiction, the balance decisions and the invariants that
+the test suite in tests/scenario_40_lostcluster.autotest.lua enforces.
+
 # EE Scenario: The lost cluster
 
 ## Basics
@@ -56,7 +65,7 @@ players at any distance — same-faction units share telemetry, and a
 nebula only blinds the 30u long-range sweep, never the 5u short-range
 one.  A station stops hiding when a player ship comes within 6u (which is
 where it would appear on short-range sensors anyway) and then joins the
-friendly contact list.  See notes/06.
+friendly contact list.  See ee-skills/reference/sensors-and-visibility.md.
 
 When Tampere 1 is hailed from afar, they say they have the H200 GPU
 nodes.  When approaching Tampere 1, three relative weak enemy ships
@@ -249,7 +258,7 @@ autotest asserts the census and the mine keep-out.
 - Non-depending objectives can happen in any order.
 - Undiscovered stations are not hailable until they are found (approach
   within 6u — the short-range radar radius, since a nebula does not hide
-  a same-faction contact at all; see notes/06).
+  a same-faction contact at all; see ee-skills/reference/sensors-and-visibility.md).
 - Every cargo drop is doubly guaranteed: the destruction hook plus a
   polled watchdog (10s grace).  The engine only fires `onDestruction` on
   damage kills, so a hull removed by script or by the GM would otherwise
@@ -359,7 +368,7 @@ civilian freighter = Atlantis.
   by `station_reveal()` once a player is within `LC_FIND_U = 6`u — the
   radius at which it would show up on short-range sensors anyway. LUT 1
   keeps its own reveal scene (neutral -> Kraylor), which fires earlier at
-  20u (notes/06).
+  20u (ee-skills/reference/sensors-and-visibility.md).
 - Handing cargo over and getting homing missiles refuelled both require
   being alongside: `near_or_docked(ship, station, handover_u(station))`,
   where `handover_u = max(LC_HANDOVER_U, hull + 0.4)` from the station
@@ -380,7 +389,7 @@ civilian freighter = Atlantis.
   any ship therefore appear on station radars only as someone gets
   close; the same replication + fog model is what a hidden station's
   nebula is supposed to exploit — which is why hiding also needs the
-  neutral transponder (notes/06).
+  neutral transponder (ee-skills/reference/sensors-and-visibility.md).
 - "Cannot be destroyed" = respawn guards: protected ships/objects that
   are destroyed re-dock or re-drop on the spot, so the mission can never
   become unwinnable.

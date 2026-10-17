@@ -23,6 +23,11 @@ Two consequences:
   clean drop-in per ~45 s, never teleport spam) as the backstop. See
   [testing/writing-drivers.md](../testing/writing-drivers.md).
 
-The Starhammer II AI fires only HVLI tubes (`ShipAI::runAttack` does not fire
-beams), so its kills depend on tube hits at closing range - which is exactly why
-a non-moving target with a small radar cross-section is never engaged. `[src]` `[obs]`
+The Starhammer II AI fires only HVLI tubes (`ShipAI::runAttack` contains no
+beam-firing code - `src/ai/ai.cpp:503` - so its kills depend on tube hits at
+closing range, which is exactly why a non-moving target with a small radar
+cross-section is never engaged). Beams are not AI-driven at all:
+`BeamWeapon::update` fires automatically whenever a target sits inside the
+arc and range with the weapon cooled (`src/spaceObjects/spaceshipParts/
+beamWeapon.cpp:251`), so an *attacking* ship still beams whatever drifts into
+its forward arcs. `[src]` `[obs]`

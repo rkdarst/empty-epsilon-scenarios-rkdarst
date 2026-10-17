@@ -45,7 +45,8 @@ end
 
 ## Nebulae
 
-`Nebula():setPosition(x, y)` has no size argument; the cloud is ~5u in radius. `[obs]`
+`Nebula():setPosition(x, y)` has no size argument; the cloud is ~5u in radius
+(`src/spaceObjects/nebula.cpp`). `[src]`
 Two rules:
 
 * For a *search area*, place N clouds on a ring (10-18u radius, even bearing
@@ -68,20 +69,33 @@ Both the client's link line and the server's `Wormhole::getLinkedWormhole()` are
   far mouth, aimed at the other mouth, so an object arriving from any direction
   is nearly collinear with the link.
 
+The exit API in 2024.12.08 is `setTargetPosition(x, y)` on the mouth
+(`setExitLocation` does not exist; read it back with `getTargetPosition()`): `[ref]`
+
 ```lua
 function link_pair(a, b, offset)
     local ax, ay = a:getPosition(); local bx, by = b:getPosition()
     local dx, dy = bx - ax, by - ay
     local d = math.sqrt(dx * dx + dy * dy)
     -- exit of a: beyond b, 3.5u past it, pointing back through b
-    a:setExitLocation(bx + dx / d * U(offset), by + dy / d * U(offset))
-    b:setExitLocation(ax - dx / d * U(offset), ay - dy / d * U(offset))
+    a:setTargetPosition(bx + dx / d * U(offset), by + dy / d * U(offset))
+    b:setTargetPosition(ax - dx / d * U(offset), ay - dy / d * U(offset))
 end
 ```
 
-Then assert it in a driver: `getDistance(a, b)` and the two exit points must not
-coincide with any mouth, and (best) put a ship at the mouth and poll for its
-position changing.
+And place the pair by **rejection sampling against mission geometry**, not by
+one `ambient_spot()` call: a mouth drags every weighted object within 2.5U
+toward its centre and teleports whatever reaches ~0.18U of it
+(`wormHole.cpp`: `DEFAULT_COLLISION_RADIUS 2500`, `TARGET_SPREAD 500`), so a
+mouth or an exit seeded beside a cargo container silently flings that container
+across the map
+([runtime-pitfalls.md #14](../reference/runtime-pitfalls.md)). Both mouths AND
+both exits must stay clear of stations *and* of every mission-critical object;
+4U clears the 2.5U drag radius with margin. `[src]` `[obs]`
+
+Then assert it in a driver: the two exit points (`getTargetPosition()`) must not
+coincide with any mouth, nothing may sit within the drag radius, and (best) put
+a ship at the mouth and poll for its position changing.
 
 ## Mines, wrecks, traders
 

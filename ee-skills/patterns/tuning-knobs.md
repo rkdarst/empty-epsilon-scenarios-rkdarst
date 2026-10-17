@@ -74,9 +74,11 @@ STORY_MODE = DIFFICULTY == "Story"
 ```
 
 then scale from the mode in one place (`enemy_multiplier`, `respawns_max`), never
-`if STORY_MODE` inside gameplay logic. The `nil` guard is not paranoia: a headless
-boot gets **no** settings at all (they arrive from the GUI), so every setting read
-must have a default or the test run silently exercises a third difficulty level. `[obs]`
+`if STORY_MODE` inside gameplay logic. The `""` guard is not paranoia: a headless
+boot applies only the header's `|Default` value (and `""` for an unmarked
+setting); every *other* value arrives only from the GUI or from an injected
+`EE_SETTINGS` override - so every setting read must have a default or the test
+run silently exercises a third difficulty level. `[src]` `[obs]`
 
 ## How to test the knobs
 

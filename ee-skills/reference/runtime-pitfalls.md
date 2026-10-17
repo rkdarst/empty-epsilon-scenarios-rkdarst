@@ -146,10 +146,30 @@ time. Cap the counts, prefer few large clouds, and log a seed census. `[obs]`
 A `PlayerSpaceship()` created by the scenario *is* an active player ship, but
 nothing drives it: it never moves on its own, never opens a dialog, and - because
 pickup is collision based - a scripted `setPosition()` onto a crate does **not**
-fire `onPickUp`. `[obs]`
+fire `onPickUp`. (Pickup also fires for *player* ships only: an AI ship can
+never take a crate, so ambient traders cannot steal objectives.)
+`[src]` `[obs]`
 
 > **Rule.** Any mechanic that depends on real movement or on the client needs a
 > probe hook that stands in for it (`probe_pickup`, `probe_warp_to`) while
 > sharing the same bookkeeping function as the real path, plus a line on the
 > human-acceptance checklist. See
 > [testing/runtime-surprises.md](../testing/runtime-surprises.md).
+
+## 14. A wormhole mouth drags and teleports nearby objects
+
+Every tick, a mouth pulls **any weighted object within 2.5U toward its centre**
+and teleports whatever reaches ~0.18U of it to `target_position +/- 0.5U`
+(`wormHole.cpp` 2024.12). There is no faction, owner or "mission object"
+exemption - a cargo container, mine or patrol seeded next to a mouth is
+silently flung to ~3.5U beyond the partner mouth. Nothing errors: a flung
+container stays valid and keeps counting, so only a *positional* check notices
+(this ate a Turku ring part once - the autotest caught it because it asserts
+the containers' distance from their station). `[src]` `[obs]`
+
+> **Rule.** Rejection-sample wormhole mouth AND exit placement against a
+> keep-out that covers stations **and every mission-critical object**
+> (containers, spawn points, rally points); 4U clears the 2.5U drag radius with
+> margin. Never assume "it was at the right coordinates at init" - ambient
+> generators run *after* mission seeding and must re-check mission geometry.
+> Recipe: [patterns/world-seeding.md](../patterns/world-seeding.md).

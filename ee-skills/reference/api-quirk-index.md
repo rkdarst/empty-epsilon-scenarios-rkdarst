@@ -12,6 +12,8 @@ One line per question we have actually had to answer. Tags as in
 | `obj:getName()` | **absent on SpaceObject** - `getTypeName()` / `getCallSign()` `[ref]` |
 | `takeHullDamage()` | engine-side only, **not callable from scripts** `[obs]` |
 | `getPreviousScriptError()` | **absent** `[obs]` |
+| `getScenarioOption()` | **absent** - there is no `-- Option:` header key in 2024.12.08 either; booleans are two-value `Setting[Key]` dropdowns `[src]` |
+| `setExitLocation()` | **absent** - a wormhole mouth's exit is `setTargetPosition(x, y)`, read back with `getTargetPosition()` `[ref]` |
 | `getAllObjects()` | present, expensive `[ref]` |
 | `getActivePlayerShips()` | present, destroyed ships leave no gaps `[ref]` |
 | `getScenarioSetting(k)` | present; `getScenarioVariation()` is the deprecated alias `[ref]` |
@@ -29,6 +31,7 @@ One line per question we have actually had to answer. Tags as in
 | A notification never arrived | `sendCommsMessage` returns false while a dialog is open | [pitfalls #3](runtime-pitfalls.md) |
 | Wormhole is one-way | the two mouths are not collinear with the traveller | [pitfalls #5](runtime-pitfalls.md) |
 | Object ping-pongs at a wormhole | destination shares coordinates with the source | [pitfalls #5](runtime-pitfalls.md) |
+| Mission container flung across the map, still valid | an ambient wormhole mouth was seeded inside the 2.5U drag zone | [pitfalls #14](runtime-pitfalls.md) |
 | A friendly station shows up although "hidden" | same-faction contacts ignore radar shadowing | [sensors](sensors-and-visibility.md) |
 | Container label never changes | artifacts have no scan-state machine | [pitfalls #7](runtime-pitfalls.md) |
 | Crate impossible to pick up | it was ejected inside the station hull | [geometry](geometry-and-units.md) |
@@ -46,7 +49,7 @@ One line per question we have actually had to answer. Tags as in
 
 1. `find vendor -name script_reference.html` → the vendored, version-correct
    reference. Search it before trusting memory or another project's scenario.
-2. The release's own `scripts/scenario_*.lua` (~40 official examples, including
+2. The release's own `scripts/scenario_*.lua` (~35 official examples, including
    the website tutorial as `scenario_05_beacon.lua` and a settings example as
    `scenario_99_battlefield.lua`) - the only *runnable* API examples there are.
 3. `scripts/model_data.lua` / `scripts/shipTemplates.lua` in the same directory:

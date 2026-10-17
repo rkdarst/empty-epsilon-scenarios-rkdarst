@@ -113,7 +113,7 @@ ee_step(112, function()
         "an organic kill after the watchdog fired does not duplicate the core")
 end)
 
--- t=150: collect what is lying around. Real collection is collision based and a
+-- t=118: collect what is lying around. Real collection is collision based and a
 -- teleported hull does not collide, so probe_pickup stands in for it (the real
 -- path shares the same bookkeeping); see testing/runtime-surprises.md.
 ee_step(118, function()
@@ -127,7 +127,7 @@ ee_step(118, function()
     end
 end)
 
--- t=150: finish through the real dialog action, at the real distance.
+-- t=135: finish through the real dialog action, at the real distance.
 ee_step(135, function()
     probe_warp_to(-U(20) + U(1.2), 0)          -- alongside Depot (Medium: hull 1.0u)
     local d = ee_dlg_open(commsDepot, stations.depot, active_players()[1])

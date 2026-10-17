@@ -22,7 +22,10 @@ fi
 
 _ee_find_vendor() {
     local c
-    for c in "$EE_REPO/vendor" "$EE_PKG_DIR/vendor" "$HOME/.cache/ee-skills/vendor"; do
+    # pkg/../vendor is the repo checkout the package was dropped into - keep it
+    # in the list even when EE_ROOT points somewhere else on purpose, or a
+    # scratch-dir EE_ROOT hides the vendored release.
+    for c in "$EE_REPO/vendor" "$EE_PKG_DIR/../vendor" "$EE_PKG_DIR/vendor" "$HOME/.cache/ee-skills/vendor"; do
         if compgen -G "$c/EE-*/" > /dev/null 2>&1; then echo "$c"; return 0; fi
     done
     echo "$EE_REPO/vendor"          # for the "run ee_get.sh first" error path
@@ -59,9 +62,10 @@ ee_guard_port() {
     EE_NS=()
     # Serialize runners. Headless EE always binds 35666, so two runs started in
     # the same second both pass the "port free" probe below and the loser
-    # segfaults on the bind. Take a machine-wide lock first (the fd stays open
-    # for the rest of the script and is inherited by the game, so it is released
-    # when the run ends) and give up rather than block forever.
+    # segfaults on the bind. Take a machine-wide lock first (held on fd 9 of the
+    # runner shell; the launch lines close fd 9 for the game child with 9>&- so
+    # an orphaned game can never keep the lock) and give up rather than block
+    # forever.
     if command -v flock > /dev/null 2>&1; then
         EE_LOCK="${EE_LOCK:-${TMPDIR:-/tmp}/ee-headless.lock}"
         if ! eval "exec 9>\"\$EE_LOCK\"" 2>/dev/null; then return 0; fi

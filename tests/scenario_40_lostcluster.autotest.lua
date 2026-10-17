@@ -328,6 +328,27 @@ steps = {
             if (tx - px) ^ 2 + (ty - py) ^ 2 <= 3000 ^ 2 then far = false end
         end
         lc_check(#ambient_wh ~= 2 or far, "wormhole exits sit outside the far mouth's pull radius")
+        -- Mouths and exits must also keep clear of mission containers: the
+        -- 2.5U drag zone teleports whatever it catches to 3.5U past the
+        -- partner, which once flung a Turku ring part across the map (the
+        -- container stayed valid, so only its distance from the station gave
+        -- it away). The scenario keeps 4U of clearance at seed time.
+        local near_cargo = false
+        for _, wh in ipairs(ambient_wh) do
+            local mx2, my2 = wh.obj:getPosition()
+            local ex2, ey2 = wh.obj:getTargetPosition()
+            local px2, py2 = wh.partner:getPosition()
+            local fx2, fy2 = wh.partner:getTargetPosition()
+            for _, pt in ipairs({ { mx2, my2 }, { ex2, ey2 }, { px2, py2 }, { fx2, fy2 } }) do
+                for _, c in ipairs(containers) do
+                    if c.a and c.a:isValid() then
+                        local ox, oy = c.a:getPosition()
+                        if (pt[1] - ox) ^ 2 + (pt[2] - oy) ^ 2 < U(4) ^ 2 then near_cargo = true end
+                    end
+                end
+            end
+        end
+        lc_check(#ambient_wh ~= 2 or not near_cargo, "wormhole mouths/exits keep clear of mission containers")
         if #ambient_wh == 2 then
             local p = active_players()[1]
             local x0, y0 = p:getPosition()

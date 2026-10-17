@@ -8,7 +8,7 @@ Where an answer lives, and the one-liners that find it in the vendored release.
 |---|---|---|
 | **API reference (version-correct)** | `find vendor -name script_reference.html` | authoritative for the pinned build. Online copy of the *current* build: <http://daid.eu/dump/script_reference.html> |
 | Official scripting tutorial | <https://daid.github.io/EmptyEpsilon/#tabs=4> | builds "Beacon of Light"; the shipped result is `scripts/scenario_05_beacon.lua` |
-| Shipped example scenarios | `vendor/EE-*/**/scripts/scenario_*.lua` | ~40 official ones — the only runnable API examples that match your version |
+| Shipped example scenarios | `vendor/EE-*/**/scripts/scenario_*.lua` | ~35 official ones — the only runnable API examples that match your version |
 | Server-side Lua libs | same `scripts/` dir: `ee.lua` (`SYSTEMS`, `ALERT_LEVELS`, `MISSILE_TYPES`), `utils.lua`, `luax.lua`, `factionInfo.lua`, `science_db.lua`, `shiptemplates/` | `require`-able server side |
 | Shipped comms scripts | `scripts/comms_station.lua`, `comms_ship.lua`, `comms_scenario_utility.lua` | default hail behaviour, overridable via `setCommsScript`/`setCommsFunction` |
 | Wiki | <https://github.com/daid/EmptyEpsilon/wiki> | esp. *Scenario Scripting*, *Fallback Content Paths*, *Headless Dedicated Server*, *Preferences file* |
@@ -25,7 +25,12 @@ git -C /tmp/ee-src sparse-checkout set src scripts
 ```
 
 Pin the tag to the vendored release (note the `EE-` prefix), otherwise you will
-"verify" against an API you do not have.
+"verify" against an API you do not have. The scripting glue lives partly in
+[SeriousProton](https://github.com/daid/SeriousProton) (sibling repo at build
+time, **not pinned** by the EmptyEpsilon repo), so for claims about callback
+storage/upvalue validation the exact SeriousProton revision that built the
+`.deb` is unrecorded - verify those against the deb's *behaviour* and tag them
+`[obs]` rather than `[src]`.
 
 ## One-liners against the vendored release
 

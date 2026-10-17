@@ -59,11 +59,12 @@ so the driver sees the scenario's own globals and `probe_*` functions.
 
 | Check | Command | Status |
 |---|---|---|
-| package works from a copy alone | `bin/ee_selftest.sh` | 3/3 steps, 27/27 demo assertions |
+| package works from a copy alone | `bin/ee_selftest.sh` | 3/3 steps, 27/27 demo assertions (x2, incl. `EE_SETTINGS` pass) |
 | templates work out of the box | skeleton + `templates/autotest_driver.lua` | 7/7, clean `init()` |
-| our long mission | `tools/func_test.sh scenarios/scenario_40_lostcluster.lua` | 127 assertions, 0 fail |
-| its DSL twin | same, `scenario_41_lostcluster_dsl.lua` | passed |
+| our long mission | `tools/func_test.sh scenarios/scenario_40_lostcluster.lua` | 169 assertions, 0 fail (3 consecutive runs) |
+| its DSL twin | same, `scenario_41_lostcluster_dsl.lua` | 17 assertions, 0 fail |
 | boot check | `tools/smoke_test.sh scenarios/scenario_90_template.lua` | OK |
+| DSL samples | `tools/dsl_check.py dsl/samples/*.yaml` | OK (warnings by design) |
 
 Re-run them after touching `lib/`, `bin/` or the pinned version. Two runs cannot
 share a machine at the same moment (headless EE binds port 35666), so the runners

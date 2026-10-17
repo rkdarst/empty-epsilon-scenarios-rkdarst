@@ -58,5 +58,5 @@ after ten minutes.
 
 Radar/visibility feel, dialog UX, warp-transit timing, and whether a nebula
 search is fun are client-side. Everything in
-[testing/what-headless-cannot-check.md](../testing/runtime-surprises.md)
+[testing/runtime-surprises.md](../testing/runtime-surprises.md)
 needs the 30-minute human session.

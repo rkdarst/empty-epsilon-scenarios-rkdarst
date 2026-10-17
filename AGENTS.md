@@ -38,7 +38,9 @@ what is repo-specific.
    [ee-skills/reference/runtime-pitfalls.md](ee-skills/reference/runtime-pitfalls.md):
    same-faction objects are always visible (nebulae only shadow the long-range
    radar), `onDestruction` fires only on damage kills, artifacts never advance
-   scan states, and station hull radii set what "alongside" and "ejected clear"
+   scan states, ambient wormhole mouths drag and teleport anything within 2.5u
+   (seed mouths and exits by rejection sampling against stations *and* mission
+   objects), and station hull radii set what "alongside" and "ejected clear"
    mean in units. Before adding a Gamemaster console layer, read
    [ee-skills/patterns/gm-console.md](ee-skills/patterns/gm-console.md): one
    `addGMFunction` call is one button, so paging is a script convention, a
@@ -105,7 +107,7 @@ automatically — the game install is never modified). Inside containers, set
 ## Where examples live
 
 The game release in `vendor/` contains the game's own `scripts/` directory with
-~40 official example scenarios (`scenario_00_basic.lua`, `scenario_05_beacon.lua`
+~35 official example scenarios (`scenario_00_basic.lua`, `scenario_05_beacon.lua`
 = the website tutorial, `scenario_99_battlefield.lua` = settings example, ...).
 Always prefer copying patterns from a shipped example over inventing API — and
 see [ee-skills/examples/demo/](ee-skills/examples/demo/) for a small mission that

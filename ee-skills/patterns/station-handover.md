@@ -25,7 +25,7 @@ end
 function near_or_docked(a, b, u)
     if a == nil or b == nil then return false end
     local docked = false
-    pcall(function() docked = a:isDocked(b) end)      -- strict: < 500 units
+    pcall(function() docked = a:isDocked(b) end)      -- pure state check, no distance
     if docked then return true end
     return d2(a, b) < U(u) ^ 2
 end
@@ -88,6 +88,8 @@ ee_eject_clear("core drop", crate, stations.depot,
 * **Ship-to-ship transfer**: no player-side menu exists in 2024.12, so implement
   it as "hail the other ship" from the *station* page or as a ship page with a
   distance gate (`d2(a,b) < U(2)^2`) between the two hulls. `[obs]`
-* A gate tighter than ~0.7u is unreachable while docked unless you accept docking
-  explicitly (this recipe does). A gate looser than ~5u triggers before the player
-  believes they arrived.
+* `isDocked` is a pure state check with no distance component; a docked ship
+  rests just off the hull surface, so the explicit dock acceptance above is what
+  makes a gate below the hull radius workable
+  ([reference/geometry-and-units.md](../reference/geometry-and-units.md)). A gate
+  looser than ~5u triggers before the player believes they arrived.

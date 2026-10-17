@@ -37,8 +37,9 @@ Recipe: [patterns/hidden-station.md](../patterns/hidden-station.md). `[src]` `[o
 ## Nebulae in practice
 
 * `Nebula():setPosition(x, y)` - no size argument; the visual cloud has a fixed
-  radius (~5u). Overlapping clouds read as one mass, so a "search area" of N
-  spaced clouds is far more legible than a random scatter. `[obs]`
+  radius (~5u, `src/spaceObjects/nebula.cpp`). Overlapping clouds read as one
+  mass, so a "search area" of N spaced clouds is far more legible than a random
+  scatter. `[src]` `[obs]`
 * A nebula does **not** hide anything at short range: flying into a cloud still
   paints everything inside it on the local radar. `[obs]`
 * Load cost is real: thousands of clouds add seconds to `init()` and slow the
@@ -57,7 +58,7 @@ radar return and the dialogue. Recipe:
 | Capability | Practical reach |
 |---|---|
 | short-range radar | 5u |
-| visual/label pickup range | a few u (and `isDocked` needs < 0.5u) |
+| visual/label pickup range | a few u (dock request range is 1u + hull radius) |
 | station comms range | unlimited (they are contacts), but see the hand-over gate below |
 | long-range contact list | same-faction = always; others = line of sight unshadowed by nebulae |
 

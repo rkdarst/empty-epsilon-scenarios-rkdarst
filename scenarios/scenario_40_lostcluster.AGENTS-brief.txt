@@ -283,11 +283,22 @@ state (every generator scales from it):
   guard additionally ejects any ship that transits twice within 15 s to
   2U further out (speedy exits aimed at the far mouth can't bounce).
   No black hole: it would eat any station within 5U.
+  **Container keep-out (added after a real flake):** a mouth drags every
+  weighted object within 2.5U and teleports whatever reaches ~0.18U of it
+  (`wormHole.cpp`, no mission-object exemption), so the rejection sampler
+  also keeps both mouths AND both exits 4u clear of every mission
+  container (`ambient_clear_containers`) — otherwise an ambient pair
+  legally seeded at 12u from Turku 1 lands its drag zone on the 10–18u
+  part ring and silently flings a component (or junk decoy) across the
+  map: the container stays valid and counted, only its distance from the
+  station changes. The autotest asserts the 4u clearance every run.
 
 Keep-outs: nothing ambient spawns within 5u of a station (8u around
-Lumina 1, so the home radar stays clean); mines demand 8u. All counts
-land in `ambient_stats` and every ambient mine in `ambient_mines`; the
-autotest asserts the census and the mine keep-out.
+Lumina 1, so the home radar stays clean); mines demand 8u; wormhole
+mouths and exits demand 4u around every mission container (see above).
+All counts land in `ambient_stats` and every ambient mine in
+`ambient_mines`; the autotest asserts the census, the mine keep-out and
+the wormhole-vs-container clearance.
 
 ## Other notes:
 

@@ -548,9 +548,29 @@ function ambient_traders()
     end
 end
 
+-- A mouth drags every weighted object within 2.5U toward its centre and
+-- teleports whatever reaches it (wormHole.cpp 2024.12, physics note below), so
+-- a mouth seeded beside a mission container would quietly fling that container
+-- to 3.5U beyond the partner mouth. This ate a Turku ring part once in the
+-- autotest: the container stayed valid and counted, only its distance from the
+-- station changed - and in real play a component would silently leave its
+-- search nebula. Keep every mouth AND exit this far from every mission
+-- container (4U = the 2.5U drag radius plus margin; exits too, so a dragged
+-- object never *arrives* on top of one either).
+function ambient_clear_containers(x, y, u)
+    for _, c in ipairs(containers) do
+        if c.a and c.a:isValid() then
+            local ox, oy = c.a:getPosition()
+            if (x - ox) ^ 2 + (y - oy) ^ 2 < U(u) ^ 2 then return false end
+        end
+    end
+    return true
+end
+
 function ambient_wormholes()
     -- Pick the pair by rejection sampling: both mouths AND both offset exits
-    -- must sit clear of the station keep-out rings. One shot at a single
+    -- must sit clear of the station keep-out rings and of every mission
+    -- container (ambient_clear_containers). One shot at a single
     -- ambient_spot() made this a coin flip per run (the autotest then sees an
     -- "ambient wormhole pair" that was never seeded); sampling until one fits
     -- is pure arithmetic, so 200 attempts are free at init.
@@ -563,7 +583,10 @@ function ambient_wormholes()
         local dd = math.sqrt(ddx * ddx + ddy * ddy)
         if dd >= U(10) and ambient_clear(sx, sy, 12) and ambient_clear(mx, my, 12)
            and ambient_clear(mx + ddx / dd * U(3.5), my + ddy / dd * U(3.5), 8)
-           and ambient_clear(sx - ddx / dd * U(3.5), sy - ddy / dd * U(3.5), 8) then
+           and ambient_clear(sx - ddx / dd * U(3.5), sy - ddy / dd * U(3.5), 8)
+           and ambient_clear_containers(sx, sy, 4) and ambient_clear_containers(mx, my, 4)
+           and ambient_clear_containers(mx + ddx / dd * U(3.5), my + ddy / dd * U(3.5), 4)
+           and ambient_clear_containers(sx - ddx / dd * U(3.5), sy - ddy / dd * U(3.5), 4) then
             ax, ay, bx, by = sx, sy, mx, my
             dx, dy, dist = ddx, ddy, dd
             break

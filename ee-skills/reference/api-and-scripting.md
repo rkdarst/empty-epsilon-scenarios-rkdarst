@@ -32,13 +32,22 @@ you four rules that are easy to violate:
 1. **Define before you register.** `obj:setCommsFunction(my_page)` and friends
    capture the function value at registration time; a later redefinition of
    `my_page` does not update existing registrations. `[src]`
-2. **Argument shape varies by callback type.** `ScriptSimpleCallback` (e.g.
-   `onCollision`, `setCommsFunction`) is invoked with the *globals table* as
-   upvalue #1 and the real arguments as upvalues #2+; `ScriptSerializedFunction`
-   (e.g. `onDestruction`, `onPickUp`) is a plain call with `(self, instigator)`.
-   A closure written for the wrong shape silently reads nil. The engine's own
-   examples start the body with `math.abs(0)` to force the globals-table
-   upvalue — copy that idiom when in doubt. `[ref]` `[obs]`
+2. **One callback class, several argument shapes.** Every callback the engine
+   takes in 2024.12.08 is a `ScriptSimpleCallback` — there is no
+   `ScriptSerializedFunction` anywhere in this build's source or generated
+   reference. At **registration** the engine validates that the function's first
+   upvalue is the globals table: a closure that captures a chunk local before it
+   references any global fails with `??[convert<ScriptSimpleCallback>::param]
+   Upvalue 1 of function is not a table` (the message comes from the
+   SeriousProton revision that built the .deb — verify the behaviour, not the
+   wording, on a new pin). The engine's own examples start the body with
+   `math.abs(0)` to force a global reference — copy that idiom when in doubt.
+   At **call time** it is a plain call whose arguments vary by callback:
+   `onDestruction(self, instigator)` (shipTemplateBasedObject.cpp:418),
+   `onPickUp(artifact, player)` (artifact.cpp:134), comms pages and reply
+   callbacks `(ship, target)` (commsScriptInterface.cpp:106,125), GM buttons
+   (no arguments). A closure written for the wrong shape silently reads nil.
+   `[src]` `[obs]`
 3. **Closures die with the object.** A custom field or closure attached to an
    object is gone once the object is destroyed, so any bookkeeping a hook needs
    must also live in a script-side table that outlives the hull. `[obs]`

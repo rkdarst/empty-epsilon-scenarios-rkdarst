@@ -3,8 +3,12 @@
 **Problem.** Cargo you can see, fly to, and pick up - with a label that means
 something *before* and *after* the crew investigates it.
 
-**Facts.** Artifacts have no scan-state machine; pickup is collision-based;
-hull radii decide where a crate is reachable:
+**Facts.** Artifacts have no scan-state machine; pickup is collision-based and
+**fires for `PlayerSpaceship` collisions only** - an AI ship flying over a
+pickupable crate can never take it (`Artifact::collide` casts the collider to
+`P<PlayerSpaceship>` and ignores everything else), so ambient traders cannot
+steal objectives. The engine destroys the artifact itself right after the
+callback. Hull radii decide where a crate is reachable:
 [reference/geometry-and-units.md](../reference/geometry-and-units.md),
 [reference/runtime-pitfalls.md #7](../reference/runtime-pitfalls.md). `[src]` `[obs]`
 

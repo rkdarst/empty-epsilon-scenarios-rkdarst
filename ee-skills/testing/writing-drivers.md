@@ -94,8 +94,9 @@ scenario bug (usually pitfall
 
 ## Forcing scenario settings
 
-`Setting[...]` values never arrive in headless runs (they come from the GUI), so
-the runner can inject them:
+Scenario settings cannot be *chosen* headlessly (the choice UI is the GUI; a
+plain headless boot applies only the `|Default` value), so the runner can inject
+any value:
 
 ```sh
 EE_SETTINGS="Difficulty=Story" ee-func.sh scenarios/scenario_40_lostcluster.lua

@@ -20,7 +20,7 @@ directory, from any repo, and from a copy on its own.
 | Var | Default | Meaning |
 |---|---|---|
 | `EE_VENDOR` | discovered | where `EE-*/` lives: `$EE_VENDOR`, `<repo>/vendor`, `<pkg>/vendor`, `~/.cache/ee-skills/vendor` |
-| `EE_TAG` | `EE-2024.12.08` | release to use; `ee_get.sh` accepts the same value as `$1` |
+| `EE_TAG` | newest vendored | release to use (`ee_locate` picks the highest `EE-*`; pin it explicitly for reproducible facts); `ee_get.sh` defaults to `EE-2024.12.08` |
 | `EE_SCENARIO_DIR` | `<cwd>/scenarios` | scenario dir exposed to the game (`ee_smoke`/`ee_func` copy the tested file here) |
 | `EE_ROOT` | package parent | project root, used for driver discovery (`$EE_ROOT/tests/<name>.autotest.lua`) |
 | `EE_CONF_DIR` | throwaway `mktemp -d` | the game's HOME; set it only if you want persistent state |
@@ -38,7 +38,7 @@ directory, from any repo, and from a copy on its own.
 
 * The runners never write into your repo: scenarios are copied into a throwaway
   config dir, and the concatenated test file lives there too.
-* A run keeps its log at `<EE_CONF_DIR>/logs/ee.log`; `ee_func.sh` prints the
-  relevant excerpt on failure and a one-line `RESULT:` always.
+* The game's log is `ee.log` in the runner's temporary run directory; `ee_func.sh`
+  prints the relevant excerpt on failure and a one-line `RESULT:` always.
 * `ee_play.sh` is the only script that needs Apptainer, and the only place
   `ee.def` is used; nothing here installs anything.

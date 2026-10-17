@@ -70,8 +70,9 @@ test prints, and confirm you see `Load script: <file>` plus your `init()` line.
 
 ## Scenario settings in a headless run
 
-`Setting[...]` values arrive only from the GUI dialog, so a headless boot always
-gets nil/empty and silently runs the default branch. `ee_func.sh` can inject them:
+`Setting[...]` values cannot be *chosen* headlessly (the choice UI is the GUI
+server-creation dialog; a plain headless boot applies only the `|Default`
+value), so `ee_func.sh` can inject any values you want:
 
 ```sh
 EE_SETTINGS="Difficulty=Story;EnemyCount=Hard" ee_func.sh scenarios/x.lua
@@ -94,8 +95,9 @@ Consequences worth remembering:
 * the prelude is generated per run, so nothing stale can leak from a previous run;
 * run your suite once per meaningful setting combination - a difficulty branch that
   is never polled is a branch that will be broken;
-* the same trick works for options via `getScenarioOption`, and for testing a
-  setting's *absence* simply omit it (that is the real headless default). `[obs]`
+* there is no options API to shadow (`getScenarioOption` does not exist in
+  2024.12.08 - booleans are two-value `Setting[Key]` dropdowns), and testing a
+  setting's *absence* is simply omitting it. `[obs]`
 
 ## End/exit markers `ee_func.sh` waits for
 

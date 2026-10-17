@@ -59,7 +59,7 @@ The second column is the 30-minute session in
 1. Read the log's own story: `Load script`, your `init()` census line, the first
    `ERROR: LUA:` line. The first error is usually the only real one.
 2. Reproduce the specific claim in a **20-line probe scenario** (see
-   [authoring/probe-snippets.md](writing-drivers.md)) instead of
+   [testing/writing-drivers.md](writing-drivers.md)) instead of
    adding prints to a 2000-line mission.
 3. If a probe contradicts the docs, believe the probe, then confirm it in the
    engine source, then write it down in `reference/` with a tag.

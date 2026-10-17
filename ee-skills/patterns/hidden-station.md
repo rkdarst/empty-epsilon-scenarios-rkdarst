@@ -2,9 +2,9 @@
 
 **Problem.** "A station our people built, but the crew must not know it is there
 until they arrive." The intuitive implementation - park it in a nebula and zero
-its radar - does not work for a friendly station, because same-faction objects are
-always on the crew's contact list, and nebulae only shadow the **long-range**
-radar. `[src]` `[obs]`
+its radar - does not work for a friendly station: on the relay radar every
+friendly object is always drawn (it seeds its own sight bubble), and nebulae
+only shadow the science/main long-range radar. `[src]` `[obs]`
 
 **Facts.** [reference/sensors-and-visibility.md](../reference/sensors-and-visibility.md).
 

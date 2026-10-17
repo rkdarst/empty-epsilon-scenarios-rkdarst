@@ -5,8 +5,9 @@ cannot see at range, cannot shoot before they find it, and can actually catch. A
 station cannot do this (fixed position, always a contact for its own faction); a
 normal ship cannot (radar paints it across the sector).
 
-**Facts.** Radar visibility is the signature triple; nebulae shadow only the
-long-range layer; a parked ship is not engaged by AI. `[src]` `[obs]`
+**Facts.** Radar visibility is faction + sight bubbles on the relay screen, and
+nebula shadowing on the science/main long-range radar; signatures feed the
+science scanner plot only; a parked ship is not engaged by AI. `[src]` `[obs]`
 
 ## Code
 
@@ -15,9 +16,7 @@ long-range layer; a parked ship is not engaged by AI. `[src]` `[obs]`
 function mk_dark_tug(x, y)
     local s = CpuShip():setTemplate("Tug"):setFaction("Independent")
         :setPosition(x, y):orderRoaming()
-    s:setRadarSignatureBiological(0)
-    s:setRadarSignatureElectrical(0)
-    s:setRadarSignatureGravity(0)
+    s:setRadarSignatureInfo(0, 0, 0)    -- no science-scanner blip either
     s:setHull(20)                       -- one HVLI hit; it must never be the puzzle
     s:setCallSign("Salvage tender")
     s:setCommsFunction(function(comms_source, comms_target)
@@ -32,11 +31,15 @@ end
 
 Three properties, each one load-bearing:
 
-* **Zeroed signatures** take it off both radar layers, so it appears only inside
-  visual range - the hunt is the point. `[obs]`
+* **Independent faction** keeps it off the relay map - nothing seeds a relay
+  sight bubble for it. Seed it inside a nebula cluster so the science/main
+  long-range radar shadows it too (`Nebula::blockedByNebula` beyond short
+  range). `[src]`
+* **Zeroed signature** (`setRadarSignatureInfo(0, 0, 0)` - the per-channel
+  setters of older examples do not exist in 2024.12.08) keeps the science
+  scanner plot blip-free. `[src]`
 * **`orderRoaming()`** keeps it moving (catchable, and it never gets stuck behind
   an asteroid) while remaining *unarmed*, so a reckless approach is not punished.
-* **Independent faction**: not on the crew's contact list, and it will not attack.
 
 Give it a *hint* payload (a comms line, a coordinate) rather than the objective
 itself, so finding it is a step and not the finish.
@@ -65,9 +68,10 @@ only prove the signature values are what the recipe claims. `[obs]`
 
 ## Variants and pitfalls
 
-* **Need it invisible to torpedoes too?** Zeroed signatures do that as a side
-  effect (no lock), which is usually desirable for a decoy and fatal for an
-  enemy - test which one you built.
+* **Need it invisible to torpedoes too?** An object off the relay map and outside
+  torpedo range is safe from *player* torpedoes; AI target acquisition uses the
+  AI ship's own radar ranges and nebula blocking (`cpuShip.cpp`) - test which
+  case you built. `[src]` `[obs]`
 * **Need it findable by the science scanner?** Then zero only the *electrical*
   signature; biological/gravity returns give the scanner something to bite on. `[obs]`
 * Do **not** hide a friendly station this way - use the faction flip

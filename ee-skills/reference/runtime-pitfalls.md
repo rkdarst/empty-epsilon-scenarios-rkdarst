@@ -67,15 +67,23 @@ oscillates forever. `[src]` `[obs]`
 > **Rule.** Give each mouth an offset exit 3-4u beyond its far side, aimed at the
 > other mouth. Recipe: [patterns/world-seeding.md](../patterns/world-seeding.md).
 
-## 6. `Nebula` is visual, not a radar shadow
+## 6. What actually hides a contact: faction, sight bubbles, nebulae, signatures
 
-Setting an object's radar signatures to zero hides it from *both* radar layers -
-but a nebula on its own only blocks the **long-range** radar; the short-range
-layer still paints everything. And objects of the crew's own faction are always
-on their contact list regardless of any of that. `[src]` `[obs]`
+Four different controls, often confused:
 
-> **Rule.** "Hidden from the crew" = faction neutrality (optionally plus a
-> zeroed short-range radar while dark). Recipes:
+* *relay radar*: friendly ships/stations are always drawn (each seeds a sight
+  bubble); everything else shows only inside a bubble - yours, other friendly
+  assets', or a 5u probe. `[src]`
+* *science/main long-range*: nebulae shadow any hideable object beyond the
+  short-range distance; within 5u nothing is hidden. `[src]`
+* *radar signatures* do not gate radar in this pin - they only feed the science
+  raw-scanner plot; zero signature means no blip there. `[src]`
+* signatures are set with the single call `setRadarSignatureInfo(g, e, b)`; the
+  per-channel `setRadarSignatureBiological/Electrical/Gravity` setters seen in
+  older examples do not exist in 2024.12.08. `[src]`
+
+> **Rule.** "Hidden from the crew" = faction neutrality (plus nebula cover for
+> the science screen, plus a zeroed short-range radar while dark). Recipes:
 > [patterns/hidden-station.md](../patterns/hidden-station.md),
 > [patterns/radar-dark-tug.md](../patterns/radar-dark-tug.md).
 

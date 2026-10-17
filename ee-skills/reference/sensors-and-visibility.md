@@ -1,25 +1,32 @@
 # Sensors, visibility and hiding things
 
-## The two radar layers
+## The radar layers
 
-| Layer | Default range | What reaches it | What blocks it |
+| Layer | Default range | Shown on | Fog of war |
 |---|---|---|---|
-| Long-range (sector map contacts) | whole sector chain the ship can see | everything, everywhere | **nebulae** - a cloud shadows what is behind it |
-| Short-range (local radar) | ~5000 units = 5u | everything inside range, including inside nebulae | nothing |
+| Long-range, science + main screen | 30000 units = 30u (`shipTemplateBasedObject.cpp`) | `NebulaFogOfWar` | an object is hidden when a nebula lies between it and the viewer *and* it is beyond the viewer's short-range radar |
+| Long-range, relay screen | 30u | `FriendlysShortRangeFogOfWar` | only objects inside a *sight bubble* are drawn: friendly ships and stations (bubble = their short-range radar range), your own probes (5u), your own ship |
+| Short-range (all screens) | ~5000 units = 5u | - | none - `Nebula::blockedByNebula` returns false inside the short-range distance, so the local radar always paints everything near you |
 
-Both layers respect an object's radar signature triple
-(`setRadarSignatureBiological/Electrical/Gravity`); zeroing all three removes the
-object from **both** layers, which is usually *more* than you want. `[src]` `[obs]`
+Radar signatures (`setRadarSignatureInfo(gravity, electrical, biological)`) do
+not gate radar drawing in this pin. They feed the science console's raw scanner
+plot (`rawScannerDataRadarOverlay.cpp`): zero signature = no scanner blip. The
+engine pre-sets signatures on its own objects (wormholes read heavy on gravity,
+jammers on electrical). `[src]`
 
 ## Faction is the real visibility switch
 
-Objects of the crew's own faction are always on their contact list, at any
-distance, nebula or not - the client lists them independently of radar. So:
+On the relay screen, every friendly ship and station is always drawn - at any
+distance, nebula or not - because each one seeds its own sight bubble
+(`radarView.cpp`). So:
 
 * an invisible *friendly* station is impossible while it stays friendly;
-* making it `Independent` (or any non-crew faction) removes it from the list, and
-  a zeroed short-range radar also removes it from the local view;
-* the reveal is just the reverse: restore the faction (and the 5000-unit radar).
+* making it `Independent` (or any non-crew faction) removes it from the relay
+  map (nothing seeds a bubble for it), and a zeroed short-range radar also
+  removes it from the local view;
+* the reveal is just the reverse: restore the faction (and the 5000-unit radar);
+* on the science/main long-range radar faction does not matter - nebulae shadow
+  any hideable object beyond short range.
 
 Recipe: [patterns/hidden-station.md](../patterns/hidden-station.md). `[src]` `[obs]`
 

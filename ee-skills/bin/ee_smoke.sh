@@ -36,7 +36,7 @@ LD_LIBRARY_PATH="${EE_LD}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}" SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}" \
 ${EE_NS[@]+"${EE_NS[@]}"} \
 "$EE_BIN" headless="$BASE" server_port="${SMOKE_PORT:-35777}" "$@" \
-    <<< 'return "smoke-probe: ok"' > "$EEHOME/run/ee.log" 2>&1 &
+    <<< 'return "smoke-probe: ok"' > "$EEHOME/run/ee.log" 2>&1 9>&- &
 pid=$!
 
 LOG="$EEHOME/run/ee.log"
@@ -47,6 +47,12 @@ for ((t=0; t<TIMEOUT*2; t++)); do
     sleep 0.5
 done
 [[ $loaded -eq 1 ]] && { sleep "$SETTLE"; grep -q "Load script: $BASE" "$LOG" || loaded=2; }
+# SIGTERM first: the netns wrapper in ee_env.sh reaps the game in an EXIT trap
+# that a SIGKILL skips, and a survivor keeps the server port (and the runner lock
+# fd) alive for the next run. Then sweep its child, then hard-kill.
+kill -TERM "$pid" 2>/dev/null
+for ((i = 0; i < 10; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+pkill -9 -P "$pid" 2>/dev/null
 kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 
 status=0

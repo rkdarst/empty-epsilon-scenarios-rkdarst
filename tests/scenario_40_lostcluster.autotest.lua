@@ -2,6 +2,12 @@
 -- tools/func_test.sh concatenates this AFTER a copy of the scenario, so
 -- production scenarios need no test hooks at all. Living in tests/ (named after
 -- the scenario) is what makes func_test.sh discover it automatically.
+--
+-- The schedule below runs to ~70 game seconds, so declare the length for the
+-- runner (a plain `tools/func_test.sh <scenario>` then lets it finish;
+-- RUNTIME=N still overrides from the outside).  See ee-skills/bin/ee_func.sh.
+-- ee_runtime: 80
+
 lc_autotest_ok, lc_autotest_fail = 0, 0
 
 function lc_check(cond, msg)
@@ -261,7 +267,16 @@ function lc_tr_poll(final)
             dsc.tr.lc_respawn_at = clock - 1   -- fast-forward the 30 s replacement
             lc_tr_state = "ff"
         elseif final then
-            lc_check(false, "destroying a booked freighter spills the playbook container")
+            -- Say which half failed: a freighter the squad never caught is a
+            -- different problem from a spill that produced no container.
+            local alive = dsc.tr:isValid()
+            lc_check(false, "destroying a booked freighter spills the playbook container"
+                .. " (freighter " .. (alive and "still alive at t=" .. math.floor(clock)
+                    .. " after a " .. math.floor(clock - 30.8) .. "s chase"
+                    .. ", and the t=50 backstop kill did not land"
+                    or "is dead but parts[" .. tostring(dsc.book) .. "].given="
+                    .. tostring(info and info.given) .. " obj valid="
+                    .. tostring(info and info.obj and info.obj:isValid())))
         end
     elseif lc_tr_state == "ff" then
         local t = transports[dsc.idx]
@@ -532,6 +547,18 @@ steps = {
     { t = 38, f = function() lc_merc_dump("late"); lc_tr_poll(false) end },
     { t = 44, f = function() lc_tr_poll(false) end },
     { t = 48.2, f = function() lc_merc_dump("tr48"); lc_tr_poll(false) end },
+    { t = 50, f = function()
+        -- The mercenary squad is the natural killer, but the fact under test is the
+        -- spill on a *damage* death, not merc AI, and a fleeing target in a 520-rock
+        -- field makes that a coin flip. If the chase is still unresolved, land the
+        -- identical damage kill here and say so in the log: the answer becomes
+        -- deterministic instead of occasional.
+        local dsc = lc_autotest_dead
+        if dsc ~= nil and lc_tr_state == "wait" and dsc.tr:isValid() then
+            print("LC-PROBE mercenary chase unresolved at t=50 - landing the damage kill directly")
+            pcall(function() dsc.tr:takeDamage(5000, "hull") end)
+        end
+    end },
     { t = 51, f = function() lc_tr_poll(false) end },
     { t = 53, f = function() lc_tr_poll(false) end },
     { t = 56, f = function() lc_tr_poll(false) end },
@@ -693,7 +720,9 @@ steps = {
     end },
     { t = 68.5, f = function()
         lc_check(phase3.spawned and #groups.wave > 0, "invasion wave spawns")
-        print(string.format("LC-AUTOTEST done: %d ok, %d fail", lc_autotest_ok, lc_autotest_fail))
+        -- Not the final line: the GM-console steps below keep ticking until the
+        -- victory locks the controls (the runner stops 3 s after "done").
+        print(string.format("LC-AUTOTEST progress: %d ok, %d fail", lc_autotest_ok, lc_autotest_fail))
     end },
     { t = 69.3, f = function()
         probe_kill_group("wave")   -- scenario should now declare victory and stop ticking
@@ -753,6 +782,249 @@ steps = {
             "same label reads 'spare parts' once a ship is alongside")
     end },
 }
+
+-- ===================== gamemaster console coverage =====================
+-- The console buttons are thin wrappers around the lc_gm_* globals (the same
+-- doorway the in-game LUA console uses), so calling the globals IS the test a
+-- headless run can do: getGMSelection() is empty and nobody clicks.
+-- See ee-skills/patterns/gm-console.md.
+
+-- Substring test that never interprets Lua magic characters: part names and
+-- messages contain "(of 3)" and "Containers (", which are patterns otherwise.
+function lc_has(hay, needle)
+    return string.find(tostring(hay), needle, 1, true) ~= nil
+end
+
+-- First beam index with a non-zero arc, for the difficulty-toggle asserts.
+function lc_gm_beam_index(p)
+    for i = 0, 15 do
+        local ok, arc = pcall(p.getBeamWeaponArc, p, i)
+        if ok and arc and arc > 0 then return i end
+    end
+end
+
+function lc_gm_page_count()
+    local n = 0
+    for _ in pairs(lc_gm_pages) do n = n + 1 end
+    return n
+end
+
+-- Every page must render headless: a page function that throws would leave a GM
+-- staring at a half-built (or empty) button list with no error on screen. Every
+-- detail page is opened for EVERY subject, because a label built from a data
+-- string is only proven short enough if the longest string was rendered.
+function lc_gm_pages_sweep()
+    local bad, n = {}, 0
+    for name in pairs(lc_gm_pages) do
+        n = n + 1
+        if lc_gm_show(name) == false then table.insert(bad, name) end
+    end
+    -- The two detail pages need a subject, so open them directly.
+    for _, name in ipairs(PART_NAMES) do lc_gm_open("part", name) end
+    for _, name in ipairs(BOOK_NAMES) do lc_gm_open("book", name) end
+    lc_gm_show("main")
+    return bad, n
+end
+
+-- Buttons are counted with a cumulative counter (the engine's list is cleared on
+-- every page swap), so a test must measure the delta a redraw produces.
+local function gm_redraw(page)
+    local before = LC_GM_BUTTONS or 0
+    lc_gm_show(page)
+    return (LC_GM_BUTTONS or 0) - before
+end
+
+table.insert(steps, { t = 6.0, f = function()
+    -- Setting[GMMenu] only decides whether the action buttons get drawn: the page
+    -- table and every lc_gm_* action are built either way, which is what lets a GM
+    -- bring the menu back mid-mission - and what makes a Disabled run a valid test
+    -- of the actions themselves.
+    lc_check(type(lc_gm_pages) == "table" and next(lc_gm_pages) ~= nil,
+        "the pager's page table is built whatever the menu setting says")
+    if LC_GM_MENU == "Disabled" then
+        lc_check(lc_gm_hidden == true, "Setting[GMMenu]=Disabled boots with the menu hidden")
+        lc_check(gm_redraw("main") == 1, "a hidden menu draws only the bring-it-back button")
+        lc_gm_menu(true)                    -- exactly what that one button does
+        lc_check(lc_gm_hidden == false and gm_redraw("main") > 1
+            and tostring(lc_gm_last):find("shown") ~= nil,
+            "and that one button brings the whole menu back")
+    else
+        lc_check(lc_gm_hidden == false, "GM console boots enabled from Setting[GMMenu]")
+        local buttons_before = LC_GM_BUTTONS or 0
+        local bad, n = lc_gm_pages_sweep()
+        lc_check(#bad == 0, "all " .. n .. " GM pages render headless" ..
+            (#bad > 0 and (": " .. table.concat(bad, ", ")) or ""))
+        lc_check((LC_GM_BUTTONS or 0) > buttons_before,
+            "rendering actually registers buttons (" .. ((LC_GM_BUTTONS or 0) - buttons_before) .. " added)")
+        -- The GM button cell is fixed-width and centers its text, so a long label
+        -- loses both ends - and the verb is what a GM needs. lc_gm_label() counts
+        -- the overflow, which makes "readable on a real console" a test result
+        -- rather than a screenshot review.
+        local over = LC_GM_LABEL_OVER
+        lc_check(over == 0, "every GM button label fits the " .. LC_GM_LABEL_MAX
+            .. "-char cell (longest " .. LC_GM_LABEL_LONGEST .. ")"
+            .. (over > 0 and (": " .. over .. " cut, e.g. " .. lc_gm_label_longest_text) or ""))
+        print("LC-PROBE longest GM label: " .. LC_GM_LABEL_LONGEST .. " chars - " .. lc_gm_label_longest_text)
+        -- The dive marker is where progress lives now that ": delivered" no
+        -- longer fits, so both of its states need asserting. parts[] is filled
+        -- lazily as crates are placed, so build the entry if the sweep got here
+        -- before this component exists, and remove it again afterwards.
+        local key = PART_NAMES[1]
+        local fresh = parts[key] == nil
+        if fresh then parts[key] = {} end
+        local info, saved = parts[key], parts[key].delivered
+        info.delivered = true
+        local done_mark = lc_gm_done(key)
+        info.delivered = false
+        local open_mark = lc_gm_done(key)
+        if fresh then parts[key] = nil else info.delivered = saved end
+        lc_check(done_mark == "*" and open_mark == "+",
+            "a dive button marks a finished subject '*' and an open one '+'")
+        lc_gm_menu(false)
+        lc_check(lc_gm_hidden == true, "the menu can be hidden from the console mid-mission")
+        lc_gm_menu(true)
+        lc_check(lc_gm_hidden == false and gm_redraw("main") > 1, "and shown again with its buttons")
+        lc_check(LC_GM_LABEL_OVER == 0, "restoring the menu still draws no over-long label")
+    end
+end })
+table.insert(steps, { t = 6.4, f = function()
+    -- "Reveal" lifts the nebula shadow; the coordinates are a separate fact, so
+    -- one button must not quietly hand out the other. (LUT is the probe: the
+    -- Kajaani dialog already unlocked the Tampere/Turku hints by now.)
+    local before = found.lut
+    lc_gm_reveal_station("all")
+    lc_check(before == false and found.lut == true, "GM reveal makes LUT 1 a known contact")
+    lc_check(known.lut ~= true, "revealing a station is not the same as knowing its coordinates")
+    lc_check(tostring(lc_gm_reveal_station("tampere")):find("0 hidden station") ~= nil,
+        "revealing an already-found station is a no-op, not an error")
+end })
+table.insert(steps, { t = 6.8, f = function()
+    lc_gm_hint("infini")
+    lc_check(known.infini == true, "GM hint hands over the Infiniband search box")
+    lc_check(tostring(lc_gm_hint("infini")):find("0 site") ~= nil, "GM hint is idempotent")
+    lc_check(lc_has(lc_gm_announce_part("B300 GPU nodes"), "broadcast a location"),
+        "GM announce reports a location without touching state")
+    lc_check(parts["B300 GPU nodes"] == nil or parts["B300 GPU nodes"].delivered ~= true,
+        "announcing a part created no delivery")
+end })
+table.insert(steps, { t = 7.2, f = function()
+    lc_check(lc_has(lc_gm_status(), "phase="), "status readout is text")
+    lc_check(lc_has(lc_gm_players(), "Epsilon"), "player list names the crew")
+    lc_check(lc_has(lc_gm_freighter_list(), "No freighters yet"),
+        "freighter list explains an empty phase 1 instead of printing nothing")
+    lc_check(lc_has(lc_gm_containers(), "Containers ("), "container list renders")
+    lc_check(lc_has(lc_gm_help(), "lc_gm_mark_part"), "console command list documents the globals")
+end })
+table.insert(steps, { t = 7.6, f = function()
+    local p = active_players()[1]
+    lc_gm_warp(2000)
+    lc_check(WARP_SPEED == 2000, "GM warp knob updates the world knob")
+    lc_check(p:getWarpSpeed() == 2000, "GM warp knob reaches the ship already flying")
+    lc_gm_warp(1000)
+    lc_check(WARP_SPEED == 1000 and p:getWarpSpeed() == 1000, "GM warp knob is restored")
+    lc_gm_grant_warp()
+    lc_check(p:hasWarpDrive(), "grant-warp leaves warp drive installed")
+end })
+
+table.insert(steps, { t = 45.5, f = function()
+    lc_gm_freighters(true)
+    local moving = 0
+    for _, t in ipairs(transports) do
+        if t:isValid() and not t.lc_stopped then moving = moving + 1 end
+    end
+    lc_check(moving == 0, "GM halt silences every freighter")
+    lc_gm_freighters(false)
+    local free = 0
+    for _, t in ipairs(transports) do
+        if t:isValid() and not t.lc_stopped then free = free + 1 end
+    end
+    lc_check(free > 0 and lc_has(lc_gm_last, "resumed"), "GM resume releases them again (update re-routes on the next tick)")
+end })
+table.insert(steps, { t = 46.2, f = function()
+    -- Re-booking a playbook must move the hull reference, the scan description
+    -- and (through book_transport) the guards, and must never duplicate the part.
+    local moved = nil
+    for k, name in ipairs(BOOK_NAMES) do
+        local info = parts[name]
+        if moved == nil and info ~= nil and not info.delivered and info.given ~= true
+            and not (info.carried and info.carried ~= false)
+            and (lc_autotest_dead == nil or lc_autotest_dead.book ~= name) then
+            lc_gm_give_book(k)
+            local t = book_transport[name]
+            if t ~= nil and t:isValid() and t.lc_book == name then moved = name end
+        end
+    end
+    lc_check(moved ~= nil, "GM can reassign a playbook to another freighter")
+    if moved ~= nil then
+        lc_check(lc_has(lc_gm_last, "gave " .. moved), "the reassignment names the new carrier in the log")
+        lc_check(parts[moved].carried == false and parts[moved].delivered ~= true,
+            "the reassigned playbook is still aboard a hull, not duplicated")
+    end
+end })
+table.insert(steps, { t = 46.6, f = function()
+    lc_check(tostring(lc_gm_scene("turku_greet")):find("greet") ~= nil,
+        "the Turku greeting replays, or reports it already played")
+    local x, y = sector_center("G12")
+    local g = {}
+    for i = 1, 2 do
+        g[i] = CpuShip():setTemplate("Piranha F12"):setFaction("Kraylor")
+            :setPosition(x + i * 1500, y):orderIdle()
+    end
+    groups.autotest_gm = g
+    lc_gm_sweep("autotest_gm")
+    local alive = 0
+    for _, s in ipairs(g) do if s:isValid() then alive = alive + 1 end end
+    lc_check(alive == 0 and tostring(lc_gm_last):find("blew up 2") ~= nil,
+        "GM sweep kills through damage, so hooks and watchdogs still apply")
+    groups.autotest_gm = nil
+    lc_check(tostring(lc_gm_sweep("nosuchgroup")):find("unknown group") ~= nil,
+        "GM sweep rejects an unknown group name")
+end })
+table.insert(steps, { t = 62, f = function()
+    -- Story mode is an absolute setter, so toggling must be reversible: read one
+    -- real beam, buff, restore. Under a Story preset the ship is already buffed
+    -- at spawn, so the exact-value round trip only applies to a Normal start; the
+    -- invariant that always holds is "after Normal, damage is not one-shot and
+    -- the snapshot is gone".
+    local p = active_players()[1]
+    local idx = p and lc_gm_beam_index(p) or nil
+    if idx == nil then
+        lc_check(false, "a player beam exists for the difficulty toggle test")
+    else
+        local started_story = STORY_MODE
+        local _, base = pcall(p.getBeamWeaponDamage, p, idx)
+        lc_gm_difficulty("Story")
+        local _, buffed = pcall(p.getBeamWeaponDamage, p, idx)
+        lc_check(STORY_MODE == true and buffed == STORY_BEAM_DAMAGE,
+            "GM story mode raises beam damage to one-shot")
+        lc_gm_difficulty("Normal")
+        local _, back = pcall(p.getBeamWeaponDamage, p, idx)
+        lc_check(STORY_MODE == false and back ~= STORY_BEAM_DAMAGE and p.lc_save == nil,
+            "GM story mode gives real damage back (" .. tostring(back) .. ") and drops the snapshot")
+        if not started_story then
+            lc_check(back == base, "the round trip lands on the original number (" .. tostring(back) .. ")")
+        end
+        if started_story then lc_gm_difficulty("Story") end   -- leave the run as configured
+        lc_check(STORY_MODE == started_story, "the toggle leaves the configured difficulty alone")
+    end
+end })
+table.insert(steps, { t = 68.6, f = function()
+    -- Controls lock the moment the mission is over. The real victory arrives at
+    -- t=69.4 (wave killed) and the runner stops 3 s after the first "done" line,
+    -- so flip the flag in place instead of waiting for the ending: one tick, no
+    -- victory() call, nothing else in the world notices.
+    local saved = done
+    done = true
+    local r1, r2 = lc_gm_mark_part("all"), lc_gm_arm_phase3()
+    local s = lc_gm_status()
+    done = saved
+    lc_check(r1 == "locked" and r2 == "locked", "GM actions refuse to run once the mission is over")
+    lc_check(lc_has(s, "done=true"), "readouts are never locked, even while the actions are")
+    lc_check(done == saved, "the synthetic lock left the mission state untouched")
+end })
+table.insert(steps, { t = 68.9, f = function()
+    print(string.format("LC-AUTOTEST done: %d ok, %d fail", lc_autotest_ok, lc_autotest_fail))
+end })
 
 function lc_run_steps()
     for _, s in ipairs(steps) do

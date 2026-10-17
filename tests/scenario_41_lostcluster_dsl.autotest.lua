@@ -1,6 +1,10 @@
 -- Tick driver for scenario_41_lostcluster_dsl.lua (mission-DSL twin).
 -- Discovered automatically by tools/func_test.sh (tests/<scenario>.autotest.lua); override
 -- with AUTOTEST=path/to/driver.lua.
+--
+-- The tick budget below plays out in ~70 game seconds; declare it so a plain
+-- tools/func_test.sh run lets the twin finish (RUNTIME=N still overrides):
+-- ee_runtime: 90
 -- fired, archetype spawn + n_alive tracking, no runtime errors) and that the
 -- twin keeps the same contracts as the hand-written scenario 40: hidden
 -- stations, polled cargo drops, hand-over range, item label states, free

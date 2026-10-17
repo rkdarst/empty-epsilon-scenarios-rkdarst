@@ -124,9 +124,13 @@ Consequences worth remembering:
 `RUNTIME` is wall-clock seconds, and a headless world advances about one game
 second per second: it must be **larger than the last `ee_step()` time plus its
 `ee_until()` deadline**, or the run ends with `driver never finished` (exit 1) even
-though every assertion that ran passed. When a driver grows, grow `RUNTIME` with it
-(or set `ee_finish_at` in the driver, which ends the run as soon as the timeline is
-done). `[obs]`
+though every assertion that ran passed. `[obs]`
+
+Rather than remembering to grow it, let the driver declare its own length with a
+header line — `-- ee_runtime: 80` — which `ee_func.sh` uses as the default when
+`RUNTIME` is not set (an explicit `RUNTIME=N` still wins). A driver whose
+timeline grows then carries its own timeout in the file that describes the
+timeline. `[obs]`
 
 ## One run at a time
 
@@ -135,3 +139,20 @@ machine-wide lock (`/tmp/ee-headless.lock`, override with `EE_LOCK`): a second
 invocation waits instead of segfaulting on the port. That is intentional — start
 long drivers sequentially, or point the second run at another machine / set
 `EE_NS`. `EE_LOCK_TIMEOUT` (default 1800 s) bounds the wait with exit 4. `[obs]`
+
+Two things used to make a queue of runs crawl instead of hand off, both fixed in
+the runners, both worth knowing when a run seems to hang before it starts: `[obs]`
+
+* A headless game started under `EE_NS` is a *child* of the netns wrapper, and
+  the wrapper reaps it from an `EXIT` trap. `kill -9` skips traps, so the game
+  survived its runner, reparented to PID 1, and kept serving 35666. The runners
+  now `kill -TERM` first, wait briefly, then `pkill -P` the child before the
+  final `kill -9`.
+* The lock lives on fd 9 of the runner shell, and fd 9 was inherited by the game
+  — so an orphan kept the *lock*, not just the port, and every later run then sat
+  in `flock` for up to `EE_LOCK_TIMEOUT`. Both launch lines now close it for the
+  child (`9>&-`), which makes an orphan harmless by construction.
+
+Symptom to recognise: the runner prints nothing for minutes, and
+`ps -eo pid,ppid,comm | grep EmptyEpsilon` shows a game whose `PPid` is 1. Kill
+it; the queue resumes immediately. `[obs]`

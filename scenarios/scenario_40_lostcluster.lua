@@ -9,6 +9,9 @@
 -- Setting[Difficulty]: Mission difficulty.
 -- Difficulty[Normal|Default]: Standard balance.
 -- Difficulty[Story]: Story mode: player beams one-shot anything they hit.
+-- Setting[GMMenu]: Show the gamemaster console controls (see the GM section).
+-- GMMenu[Enabled|Default]: GM console gets the mission-control buttons.
+-- GMMenu[Disabled]: no GM buttons are added; lc_gm_* functions still work.
 
 -- ========================= scale & helpers =========================
 -- 1 in-game displayed unit == 1000 script units. Sector grid is the engine
@@ -133,19 +136,42 @@ STORY_MODE = LC_DIFFICULTY == "Story"
 STORY_BEAM_DAMAGE = 5000
 
 function story_buff(p)
-    local n = 0
+    if p.lc_save ~= nil then return end   -- already buffed; watch_player calls this per tick
+    local save, n = {}, 0
     for i = 0, 15 do
         local ok, arc = pcall(p.getBeamWeaponArc, p, i)
         if ok and arc and arc > 0 then
             local _, dir = pcall(p.getBeamWeaponDirection, p, i)
             local _, rng = pcall(p.getBeamWeaponRange, p, i)
             local _, cyc = pcall(p.getBeamWeaponCycleTime, p, i)
+            local _, dmg = pcall(p.getBeamWeaponDamage, p, i)
+            save[i] = { arc = arc, dir = dir, rng = rng, cyc = cyc, dmg = dmg }
             if pcall(p.setBeamWeapon, p, i, arc, dir, rng, cyc, STORY_BEAM_DAMAGE) then
                 n = n + 1
             end
         end
     end
+    -- Remember what we overwrote: the difficulty toggle has to be reversible
+    -- mid-mission and setBeamWeapon is absolute, so buffing again without
+    -- restoring first would only ever ratchet.
+    if n > 0 then p.lc_save = save end
     print("LC: story buff on " .. (p:getCallSign() or "?") .. ": " .. n .. " beam(s) set to damage " .. STORY_BEAM_DAMAGE)
+end
+
+-- Undo story_buff from the snapshot taken above (lc_gm_difficulty / story mode
+-- toggle). Returns false for a ship that was never buffed.
+function story_off(p)
+    local save = p.lc_save
+    if save == nil then return false end
+    local n = 0
+    for i, b in pairs(save) do
+        if pcall(p.setBeamWeapon, p, i, b.arc, b.dir, b.rng, b.cyc, b.dmg) then
+            n = n + 1
+        end
+    end
+    p.lc_save = nil
+    print("LC: story buff removed from " .. (p:getCallSign() or "?") .. ": " .. n .. " beam(s) restored")
+    return true
 end
 
 function all_dead(group)
@@ -704,6 +730,10 @@ contents only once you fly close enough to read the shipping label.]])
     -- traffic, a wormhole pair) everywhere the mission does not live.
     seed_ambient()
 
+    -- Gamemaster console (no-op when Setting[GMMenu] is Disabled; the lc_gm_*
+    -- functions work either way). pcall: a missing GM API must not break a mission.
+    pcall(lc_gm_boot)
+
     print("LC: init complete, phase=" .. phase .. " difficulty=" .. LC_DIFFICULTY)
 end
 
@@ -1167,28 +1197,35 @@ function deliver_to_lumina(ship)
         end
     end
     if #given == 0 then return "We have nothing to take from you." end
-    local msg = "Received: " .. table.concat(given, ", ") .. "."
+    return "Received: " .. table.concat(given, ", ") .. "." .. lc_after_delivery()
+end
+
+-- What a completed hand-over does to the mission, as one function so the comms
+-- path and the GM shortcut (lc_gm_mark_part / lc_gm_deliver_book) can never arm
+-- different phases. Returns the text to append to the crew's message.
+function lc_after_delivery()
+    local extra = ""
     if phase == 2 and part_delivered_count(BOOK_NAMES) >= #BOOK_NAMES and not phase3.armed then
         phase3.armed = true
         print("LC: all playbooks delivered, phase 3 armed")
     end
     local ndone = part_delivered_count(PART_NAMES)
     if phase == 1 and ndone >= #PART_NAMES then
-        msg = msg .. "\nAll six components! But our Ansible Playbooks were loaded onto a civilian transport. We are launching shuttle patrols to help you find them."
+        extra = extra .. "\nAll six components! But our Ansible Playbooks were loaded onto a civilian transport. We are launching shuttle patrols to help you find them."
         phase2_start()
-        return msg
+        return extra
     end
     if phase == 1 and not infini_hint_given then
         infini_hint_given = true
         known.infini = true
-        msg = msg .. "\nStill missing: the Infiniband switches. Intel places them somewhere in the mid-map box, rows A-E x columns 8-13. Search the nebulas there."
+        extra = extra .. "\nStill missing: the Infiniband switches. Intel places them somewhere in the mid-map box, rows A-E x columns 8-13. Search the nebulas there."
     elseif phase == 1 then
-        msg = msg .. "\n" .. ndone .. " of 6 components delivered."
+        extra = extra .. "\n" .. ndone .. " of 6 components delivered."
     end
     if phase == 2 then
-        msg = msg .. "\n" .. part_delivered_count(BOOK_NAMES) .. " of 3 playbooks recovered."
+        extra = extra .. "\n" .. part_delivered_count(BOOK_NAMES) .. " of 3 playbooks recovered."
     end
-    return msg
+    return extra
 end
 
 function commsTurku(t, src)
@@ -1208,6 +1245,17 @@ function commsTurku_replies(t, src)
         return true
     end)
     comms_replenish_reply(t, src, commsTurku_replies)
+end
+
+-- Turku 1's arrival greeting. Its own function so the GM console can replay it
+-- (the players arriving is the normal trigger, see update()).
+function turku_greet()
+    if turku_greeted then return "already greeted" end
+    lc_notify([[Turku 1 here! We hid the Intel compute nodes and the
+Lustre server in cargo containers across seven nebulas around us. Fly close to every
+container to read the labels - the Kraylor scattered junk decoys among them.]], stations.turku)
+    turku_greeted = true
+    return "greeted"
 end
 
 function commsLUT(t, src)
@@ -1471,10 +1519,7 @@ function update(delta)
     if not turku_greeted then
         for _, p in ipairs(players) do
             if d2(p, stations.turku) < U(20) ^ 2 then
-                lc_notify([[Turku 1 here! We hid the Intel compute nodes and the
-Lustre server in cargo containers across seven nebulas around us. Fly close to every
-container to read the labels - the Kraylor scattered junk decoys among them.]], stations.turku)
-                turku_greeted = true
+                turku_greet()
                 break
             end
         end
@@ -1730,8 +1775,1029 @@ function spawn_wave()
     print("LC: phase 3 wave spawned, count=" .. #groups.wave)
 end
 
+-- ========================= gamemaster console =========================
+-- EE's GM console is a FLAT list of script buttons; there is no nesting API.
+-- Shipped missions fake submenus with a label convention - "+Name" opens a
+-- page, "-Name" goes back - and swap the list by hand with clearGMFunctions()
+-- (vendor scripts/scenario_88_chaos.lua). [obs]
+--
+-- Three engine facts this section is built around (see
+-- ee-skills/patterns/gm-console.md):
+--  * The button list is scenario-wide, not per-GM. A page swap is global
+--    state, so every action re-renders the page it belongs to instead of
+--    leaving a second GM sitting on dead buttons.
+--  * A function handed to addGMFunction must have the globals table as upvalue
+--    #1. Passing a named function that references a chunk local fails with
+--    "Upvalue 1 of function is not a table", so every button goes through
+--    lc_gm_button's closure with the usual math.abs(0) guard. [obs]
+--  * Headless, addGMFunction / clearGMFunctions / addGMMessage all succeed and
+--    getGMSelection() returns an empty table, so pages render and actions run
+--    in the autotest exactly as they do at the table. [obs]
+--
+-- Every action is also a plain global lc_gm_* function - the doorway the
+-- in-game LUA console uses, and what tests/scenario_40_lostcluster.autotest.lua
+-- drives. Actions are idempotent, log exactly one "LC-GM:" line, refuse to run
+-- once the mission is over, and never call destroy() on a ship: kills go
+-- through takeDamage so onDestruction and the drop watchdogs still fire.
+
+LC_GM_MENU = getScenarioSetting("GMMenu")
+if LC_GM_MENU == nil or LC_GM_MENU == "" then LC_GM_MENU = "Enabled" end
+lc_gm_page = "main"
+lc_gm_hidden = (LC_GM_MENU == "Disabled")
+GM_WARP_STEPS = { WARP_SPEED, 1500, 2000, 500 }
+lc_gm_warp_idx = 1
+GM_SHIP_TEMPLATES = { "Phobos M3P", "Exguard", "Athena", "Overlord" }
+lc_gm_ship_idx = 1
+
+function lc_gm_log(msg)
+    -- lc_gm_last / LC_GM_CALLS are the audit trail the autotest driver asserts
+    -- on: the console has no text fields, so the log is the observable truth.
+    LC_GM_CALLS = (LC_GM_CALLS or 0) + 1
+    lc_gm_last = msg
+    print("LC-GM: " .. msg)
+    return msg
+end
+
+-- Report to the GM: always the log (the autotest greps it), plus a console
+-- message when a GM console actually exists.
+function lc_gm_say(msg)
+    lc_gm_log(msg)
+    pcall(addGMMessage, "LC: " .. msg)
+    return msg
+end
+
+function lc_gm_guard()
+    if done then
+        lc_gm_say("mission already finished - controls are locked")
+        return false
+    end
+    return true
+end
+
+-- The GM console draws each button in a fixed-width cell and CENTERS the text,
+-- so a label longer than the cell is clipped at both ends - and what disappears
+-- is the verb that said what the button does. Observed budget in EE-2024.12.08:
+-- 23 characters fits, more does not. So: 20 characters, verb first, no state
+-- suffixes (a state belongs in a readout message or a marker, not on a button),
+-- and the check lives here so the driver fails on a long label instead of a GM
+-- failing to read one on a live console.
+LC_GM_LABEL_MAX = 20
+LC_GM_LABEL_OVER = LC_GM_LABEL_OVER or 0
+LC_GM_LABEL_LONGEST = LC_GM_LABEL_LONGEST or 0
+lc_gm_label_longest_text = ""
+
+function lc_gm_label(label)
+    label = tostring(label)
+    if #label > LC_GM_LABEL_LONGEST then
+        LC_GM_LABEL_LONGEST = #label
+        lc_gm_label_longest_text = label
+    end
+    if #label <= LC_GM_LABEL_MAX then return label end
+    LC_GM_LABEL_OVER = LC_GM_LABEL_OVER + 1
+    print("LC-GM: label over the " .. LC_GM_LABEL_MAX .. "-char budget (" .. #label .. "): " .. label)
+    return label:sub(1, LC_GM_LABEL_MAX - 3) .. "..."
+end
+
+-- Dive-button marker: "+" opens a page, "*" opens a page whose subject is
+-- already finished. One character, so a page stays a glanceable progress list
+-- without a ": delivered" suffix eating the budget.
+function lc_gm_done(name)
+    local info = parts[name]
+    return (info ~= nil and info.delivered == true) and "*" or "+"
+end
+
+-- One console button. The closure keeps the globals table as upvalue #1 (the
+-- engine converts it into a ScriptSimpleCallback and checks exactly that).
+function lc_gm_button(label, fn)
+    LC_GM_BUTTONS = (LC_GM_BUTTONS or 0) + 1
+    local shown = lc_gm_label(label)
+    local ok, err = pcall(addGMFunction, shown, function()
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        return fn()
+    end)
+    if ok == false then print("LC-GM: addGMFunction(" .. shown .. ") failed: " .. tostring(err)) end
+    return ok
+end
+
+function lc_gm_show(page)
+    lc_gm_page = page
+    local ok, err = pcall(lc_gm_render)
+    if ok == false then print("LC-GM: page render failed: " .. tostring(err)) end
+    return ok
+end
+
+-- ---------- target and name resolution ----------
+-- Headless - and for a GM that selected nothing - this is nil, so every action
+-- needs a fallback that does not depend on a selection.
+function lc_gm_selected()
+    local ok, sel = pcall(getGMSelection)
+    if ok == false or sel == nil then return nil end
+    for _, o in ipairs(sel) do
+        if o ~= nil and o:isValid() then return o end
+    end
+    return nil
+end
+
+-- "all", an exact part name, or a bare index ("4" = 4th component; the playbooks
+-- page uses "1".."3"). Always returns a list, empty for nonsense.
+function lc_gm_part_names(arg)
+    local out = {}
+    if arg == nil or tostring(arg) == "all" then
+        for _, n in ipairs(PART_NAMES) do table.insert(out, n) end
+        for _, n in ipairs(BOOK_NAMES) do table.insert(out, n) end
+        return out
+    end
+    local s = tostring(arg)
+    for _, n in ipairs(PART_NAMES) do if n == s then return { n } end end
+    for _, n in ipairs(BOOK_NAMES) do if n == s then return { n } end end
+    local i = tonumber(s:match("^(%d+)$"))
+    if i ~= nil then
+        if PART_NAMES[i] then return { PART_NAMES[i] } end
+        if BOOK_NAMES[i] then return { BOOK_NAMES[i] } end
+    end
+    return out
+end
+
+function lc_gm_book_names(arg)
+    local out = {}
+    if arg == nil or tostring(arg) == "all" then
+        for _, n in ipairs(BOOK_NAMES) do table.insert(out, n) end
+        return out
+    end
+    local s = tostring(arg)
+    for _, n in ipairs(BOOK_NAMES) do if n == s then return { n } end end
+    local i = tonumber(s:match("^(%d+)$"))
+    if i ~= nil and BOOK_NAMES[i] then return { BOOK_NAMES[i] } end
+    return out
+end
+
+-- Take a part out of whatever cargo bay holds it (player or freighter) as part
+-- of a GM shortcut, so the world cannot end up holding a part twice.
+function lc_gm_uncarry(name)
+    local info = parts[name]
+    if info == nil or info.carried == nil or info.carried == false then return false end
+    local holder = info.carried
+    info.carried = false
+    if holder ~= nil and holder:isValid() and holder.lc_book == name then
+        holder.lc_book = nil
+        pcall(holder.setDescription, holder, "routine supplies")
+    end
+    book_transport[name] = nil
+    return true
+end
+
+-- Remove a crate. Artifacts carry no destruction bookkeeping (the parts table
+-- is the truth), so destroy() is fine here - unlike for ships, where a kill has
+-- to go through damage for the hooks to run.
+function lc_gm_clear_crate(name)
+    local info = parts[name]
+    if info == nil or info.obj == nil then return false end
+    local ok, valid = pcall(function() return info.obj:isValid() end)
+    if ok == false or valid == false then
+        info.obj = nil
+        return false
+    end
+    info.obj:destroy()
+    info.obj = nil
+    return true
+end
+
+-- A position where the crew can reach something right now.
+function lc_gm_near_players()
+    local ps = active_players()
+    if #ps > 0 then
+        local x, y = ps[1]:getPosition()
+        return x + U(2), y
+    end
+    local x, y = stations.lumina:getPosition()
+    return x + U(2), y
+end
+
+-- A live Kraylor hull near the players, tracked in the wave group so the phase-3
+-- "wave destroyed" check still sees a clean slate.
+function lc_gm_spawn_enemy(template, faction)
+    if not lc_gm_guard() then return "locked" end
+    local x, y = lc_gm_near_players()
+    local s = CpuShip():setTemplate(template or "Adder MK5"):setFaction(faction or "Kraylor")
+        :setPosition(x + random(-U(4), U(4)), y + random(-U(4), U(4)))
+        :setCallSign("Kraylor " .. (#groups.wave + 1))
+    local players = active_players()
+    if #players > 0 then s:orderAttack(players[1]) else s:orderRoaming() end
+    table.insert(groups.wave, s)
+    return lc_gm_say("spawned a hostile " .. (template or "Adder MK5") .. " beside the players (" ..
+        #groups.wave .. " in the wave group)")
+end
+
+-- ---------- actions: parts and playbooks ----------
+-- The shortcut for "the crew found this". It runs the same consequence code as
+-- a real hand-over (lc_after_delivery), so a button press can never arm a phase
+-- the players would not have armed themselves.
+function lc_gm_mark_part(arg)
+    if not lc_gm_guard() then return "locked" end
+    local phase_before, n, skipped = phase, 0, 0
+    for _, name in ipairs(lc_gm_part_names(arg)) do
+        local info = parts[name]
+        if info == nil then
+            parts[name] = { carried = false, delivered = false }
+            info = parts[name]
+        end
+        if info.delivered then
+            skipped = skipped + 1
+        else
+            lc_gm_uncarry(name)
+            lc_gm_clear_crate(name)
+            info.delivered = true
+            n = n + 1
+        end
+    end
+    local extra = lc_after_delivery()
+    if phase ~= phase_before then
+        lc_notify("Lumina 1: the analysis is complete - our next objective is underway.")
+    end
+    return lc_gm_say("marked " .. n .. " part(s) delivered, " .. skipped .. " already done" ..
+        "; components " .. part_delivered_count(PART_NAMES) .. "/6, playbooks " ..
+        part_delivered_count(BOOK_NAMES) .. "/3" .. extra)
+end
+
+-- Put a crate beside the crew, or move the existing crate there. Refuses while
+-- the part sits in a cargo bay or is already delivered, since that would put a
+-- second copy of the same object in the world.
+function lc_gm_drop_part(arg)
+    if not lc_gm_guard() then return "locked" end
+    local x, y = lc_gm_near_players()
+    local n, refused = 0, 0
+    for _, name in ipairs(lc_gm_part_names(arg)) do
+        local info = parts[name]
+        if info == nil then
+            parts[name] = { carried = false, delivered = false }
+            info = parts[name]
+        end
+        local adrift = info.obj ~= nil and pcall(function() return info.obj:isValid() end) and info.obj:isValid()
+        if info.delivered or (info.carried and info.carried ~= false) then
+            refused = refused + 1
+        elseif adrift then
+            info.obj:setPosition(x, y)
+            n = n + 1
+        else
+            mk_part(name, x, y)
+            n = n + 1
+        end
+    end
+    return lc_gm_say("placed " .. n .. " crate(s) beside the players, " .. refused ..
+        " refused (in a bay or already delivered)")
+end
+
+-- "Tell them where to look." Repeats what the mission already knows; it never
+-- invents a location, so it cannot contradict a comms hint.
+function lc_gm_announce_part(arg)
+    if not lc_gm_guard() then return "locked" end
+    local n = 0
+    for _, name in ipairs(lc_gm_part_names(arg)) do
+        local info = parts[name]
+        if info ~= nil then
+            local where = "not recovered yet"
+            if info.delivered then
+                where = "already delivered to Lumina 1"
+            elseif info.carried and info.carried ~= false then
+                where = "in " .. (info.carried:getCallSign() or "a cargo bay") .. "'s cargo bay"
+            elseif info.obj ~= nil and pcall(function() return info.obj:isValid() end) and info.obj:isValid() then
+                local cx, cy = info.obj:getPosition()
+                where = "adrift in sector " .. (info.drop_sector or getSectorName(cx, cy))
+            end
+            lc_notify("Lumina 1 sensor summary: " .. name .. " is " .. where .. ".")
+            n = n + 1
+        end
+    end
+    return lc_gm_say("broadcast a location for " .. n .. " part(s)")
+end
+
+-- ---------- actions: stations and hints ----------
+-- "Reveal" only lifts the nebula shadow (the station becomes visible); it does
+-- not hand the crew the coordinates, which is what the known[] hints do. The
+-- two are deliberately separate buttons because they are separate facts in the
+-- fiction, and the driver asserts they stay separate.
+function lc_gm_reveal_station(which)
+    if not lc_gm_guard() then return "locked" end
+    local n = 0
+    for _, name in ipairs({ "tampere", "turku", "lut" }) do
+        if which == nil or which == "all" or which == name then
+            if found[name] then
+                lc_gm_log("station " .. name .. " was already found")
+            else
+                station_reveal(name)
+                n = n + 1
+            end
+        end
+    end
+    return lc_gm_say("revealed " .. n .. " hidden station(s); coordinates are still" ..
+        " only what the hint buttons give")
+end
+
+function lc_gm_hint(which)
+    if not lc_gm_guard() then return "locked" end
+    local n = 0
+    for _, name in ipairs({ "tampere", "turku", "lut", "infini" }) do
+        if which == nil or which == "all" or which == name then
+            if known[name] then
+                lc_gm_log("hint for " .. name .. " was already given")
+            else
+                known[name] = true
+                n = n + 1
+            end
+        end
+    end
+    if n > 0 then
+        lc_notify("Intel has forwarded the coordinates our shutters lost. Check the status page.")
+    end
+    return lc_gm_say("gave the crew coordinates for " .. n .. " site(s)")
+end
+
+-- ---------- actions: phase ----------
+function lc_gm_phase2()
+    if not lc_gm_guard() then return "locked" end
+    if phase > 1 then return lc_gm_say("phase 2 is already running (phase=" .. phase .. ")") end
+    for _, name in ipairs(PART_NAMES) do
+        local info = parts[name]
+        if info == nil then
+            parts[name] = { carried = false, delivered = false }
+            info = parts[name]
+        end
+        if not info.delivered then
+            lc_gm_uncarry(name)
+            lc_gm_clear_crate(name)
+            info.delivered = true
+        end
+    end
+    local extra = lc_after_delivery()
+    return lc_gm_say("marked all six components delivered, phase is now " .. phase .. extra)
+end
+
+-- Arm or disarm the phase-3 fleet. update() does the warning and the spawn, so
+-- a GM arming it far from Lumina 1 simply never triggers it - the same rule the
+-- players are under.
+function lc_gm_arm_phase3(on)
+    if not lc_gm_guard() then return "locked" end
+    local want = on
+    if want == nil then want = not phase3.armed end
+    if want == phase3.armed then
+        return lc_gm_say("phase 3 is already " .. (want and "armed" or "disarmed"))
+    end
+    phase3.armed = want
+    if want then
+        phase3.warned = false
+        phase3.timer = 0
+    end
+    return lc_gm_say("phase 3 " .. (want and "armed: it warns, then spawns a fleet" or "disarmed"))
+end
+
+-- Skip the warning timer and put the fleet on the table now.
+function lc_gm_spawn_wave()
+    if not lc_gm_guard() then return "locked" end
+    phase3.armed = true
+    phase3.warned = true
+    phase3.timer = 0
+    phase3.spawned = false
+    return lc_gm_say("fleet spawn requested; update() spawns it on the next tick")
+end
+
+function lc_gm_victory()
+    if not lc_gm_guard() then return "locked" end
+    done = true
+    lc_notify("Lumina 1: the cluster is ours. Well done, Epsilon.")
+    victory("Human Navy")
+    return lc_gm_say("victory declared for Human Navy")
+end
+
+-- ---------- actions: playbooks and freighters ----------
+-- Put a playbook on a freighter hull: the booking (lc_book), the scan
+-- description and the guard slot all follow the object, and update_transports
+-- re-homes the guards from book_transport, so nothing else needs patching.
+function lc_gm_give_book(arg)
+    if not lc_gm_guard() then return "locked" end
+    local names = lc_gm_book_names(arg)
+    if #names ~= 1 then return lc_gm_say("give_book needs exactly one playbook, got " .. #names) end
+    local book = names[1]
+    local info = parts[book]
+    if info ~= nil and info.delivered then return lc_gm_say(book .. " is already delivered") end
+    if info ~= nil and info.carried and info.carried ~= false then
+        return lc_gm_say(book .. " is already in " .. (info.carried:getCallSign() or "a ship") .. "'s cargo bay")
+    end
+    local sel, t = lc_gm_selected(), nil
+    for _, tr in ipairs(transports) do
+        if tr:isValid() and sel ~= nil and tr == sel then t = tr end
+    end
+    if t == nil and sel ~= nil then
+        return lc_gm_say("the selection is not a freighter - select one, or give_book(\"" .. book .. "\") picks one")
+    end
+    if t == nil then
+        for _, tr in ipairs(transports) do
+            if t == nil and tr:isValid() and obj_field(tr, "lc_book", nil) == nil then t = tr end
+        end
+    end
+    if t == nil then
+        return lc_gm_say("no free freighter is carrying anything - phase 2 spawns the ten freighters")
+    end
+    if info == nil then
+        parts[book] = { carried = false, delivered = false }
+        info = parts[book]
+    end
+    lc_gm_uncarry(book)
+    lc_gm_clear_crate(book)
+    info.given = nil
+    t.lc_book = book
+    book_transport[book] = t
+    t:setDescriptionForScanState("fullscan", "A civilian freighter. Cargo manifest: one Ansible Playbook, sealed.")
+    return lc_gm_say("gave " .. book .. " to " .. (t.lc_sign or t:getCallSign()) .. " (its guards follow the hull)")
+end
+
+function lc_gm_deliver_book(arg)
+    if not lc_gm_guard() then return "locked" end
+    local n = 0
+    for _, book in ipairs(lc_gm_book_names(arg)) do
+        local info = parts[book]
+        if info == nil then
+            parts[book] = { carried = false, delivered = false }
+            info = parts[book]
+        end
+        if info.delivered then
+            lc_gm_log(book .. " was already delivered")
+        else
+            lc_gm_uncarry(book)
+            lc_gm_clear_crate(book)
+            info.delivered = true
+            n = n + 1
+        end
+    end
+    local extra = lc_after_delivery()
+    return lc_gm_say("delivered " .. n .. " playbook(s), " .. part_delivered_count(BOOK_NAMES) ..
+        "/3 recovered, phase 3 armed=" .. tostring(phase3.armed) .. extra)
+end
+
+-- ---------- actions: freighter traffic ----------
+function lc_gm_freighters(stop)
+    if not lc_gm_guard() then return "locked" end
+    if #transports == 0 then
+        return lc_gm_say("no freighters on the map yet - phase 2 spawns the ten of them")
+    end
+    local n = 0
+    for _, t in ipairs(transports) do
+        if t:isValid() then
+            t.lc_stopped = stop and true or false
+            if stop == false or stop == nil then t.lc_next = nil end  -- resume: re-route at once
+            n = n + 1
+        end
+    end
+    return lc_gm_say((stop and "halted " or "resumed ") .. n .. " freighter(s)")
+end
+
+-- Bring a shot-down freighter back without waiting for the 30 s watchdog.
+function lc_gm_respawn_freighter(arg)
+    if not lc_gm_guard() then return "locked" end
+    local n, waiting = 0, 0
+    for i, t in ipairs(transports) do
+        local st = transport_pos[i]
+        local sign = t.lc_sign or (st and st.sign) or "Freighter ?"
+        local want = arg == nil or tostring(arg) == "all" or tostring(arg) == sign or
+            ("Freighter " .. tostring(arg)) == sign
+        if want then
+            if t:isValid() then
+                waiting = waiting + 1
+            else
+                transports[i] = mk_transport_like({ lc_sign = sign })
+                transport_pos[i] = nil
+                n = n + 1
+            end
+        end
+    end
+    return lc_gm_say("respawned " .. n .. " wrecked freighter(s), " .. waiting .. " still alive")
+end
+
+-- Guard respawn credits: how many Kraylor escorts a playbook slot may still
+-- replace. Zero credits means the convoy is finally harmless.
+function lc_gm_guard_credits(n)
+    if not lc_gm_guard() then return "locked" end
+    local add = tonumber(n) or 1
+    if #guard_slots == 0 then return lc_gm_say("no playbook convoys exist yet to add credits to") end
+    local pending = 0
+    for _, slot in ipairs(guard_slots) do
+        slot.respawns_left = slot.respawns_left + add
+        pending = pending + slot.respawns_left
+    end
+    return lc_gm_say("added " .. add .. " respawn credit(s) per convoy; " .. pending .. " respawns left in total")
+end
+
+-- ---------- actions: scenes ----------
+-- Replay or skip the scripted beats. Each one calls the very function the
+-- trigger calls, so the story text and the world effects stay identical.
+function lc_gm_scene(which)
+    if not lc_gm_guard() then return "locked" end
+    if which == "tampere_ambush" then
+        if tampere_state ~= "waiting" then
+            return lc_gm_say("the Tampere 1 ambush already played (" .. tampere_state .. ")")
+        end
+        tampere_ambush()
+        return lc_gm_say("Tampere 1 ambush spawned (3 Adders)")
+    elseif which == "lut_reveal" then
+        if lut_state ~= "friendly" then
+            return lc_gm_say("LUT 1 is already " .. lut_state)
+        end
+        lut_reveal()
+        return lc_gm_say("LUT 1 revealed as hostile with its garrison")
+    elseif which == "turku_greet" then
+        return lc_gm_say("Turku 1 greeting: " .. tostring(turku_greet()))
+    elseif which == "b300_drop" then
+        local info = parts["B300 GPU nodes"]
+        if info ~= nil and info.delivered then return lc_gm_say("the B300 nodes are already delivered") end
+        if not all_dead(groups.b300) then
+            lc_gm_sweep("b300")     -- organic kill: the destruction hook drops the crate
+            return lc_gm_say("destroyed the C10 patrol; its hook drops the crate")
+        end
+        if part_out_there("B300 GPU nodes") then return lc_gm_say("the B300 crate is already on the map") end
+        local x, y = sector_center("C10")
+        drop_b300(x, y)
+        return lc_gm_say("dropped the B300 crate in C10 by hand (patrol was already gone)")
+    end
+    return lc_gm_say("unknown scene: " .. tostring(which) ..
+        " (tampere_ambush, lut_reveal, turku_greet, b300_drop)")
+end
+
+-- ---------- actions: groups ----------
+-- Wipe a group. Kills go through takeDamage, never destroy(), because
+-- onDestruction only fires on damage kills and the B300 crate, the playbook
+-- spill and the guard respawns all hang off those hooks.
+function lc_gm_group_names()
+    local out = {}
+    for _, k in ipairs({ "ambush", "lut", "b300", "guards", "wave", "freighters" }) do
+        table.insert(out, k)
+    end
+    return out
+end
+
+function lc_gm_sweep(which)
+    if not lc_gm_guard() then return "locked" end
+    local group, label = groups[which], which
+    if which == "freighters" then group, label = transports, "freighters" end
+    if group == nil then
+        return lc_gm_say("unknown group \"" .. tostring(which) .. "\": " .. table.concat(lc_gm_group_names(), " "))
+    end
+    local killed, wrecked = 0, 0
+    for _, s in ipairs(group) do
+        if s ~= nil and s:isValid() then
+            pcall(function() s:takeDamage(5000, "hull") end)
+            killed = killed + 1
+        else
+            wrecked = wrecked + 1
+        end
+    end
+    return lc_gm_say("blew up " .. killed .. " ship(s) in " .. label .. ", " .. wrecked ..
+        " already wrecked; watchdogs cover anything a hook missed")
+end
+
+-- ---------- actions: tuning and spawns ----------
+-- Warp speed is a live knob: WARP_SPEED is what ensure_ftl() hands to the next
+-- ship, and this pushes the new value onto everything already flying.
+function lc_gm_warp(step)
+    if not lc_gm_guard() then return "locked" end
+    local v = tonumber(step)
+    if v == nil then
+        if step ~= nil then return lc_gm_say("warp step must be a number, got " .. tostring(step)) end
+        lc_gm_warp_idx = lc_gm_warp_idx % #GM_WARP_STEPS + 1
+        v = GM_WARP_STEPS[lc_gm_warp_idx]
+    end
+    WARP_SPEED = v
+    local n = 0
+    for _, p in ipairs(active_players()) do
+        if p:hasWarpDrive() then p:setWarpSpeed(v) n = n + 1 end
+    end
+    for _, t in ipairs(transports) do
+        if t:isValid() and t:hasWarpDrive() then t:setWarpSpeed(v) n = n + 1 end
+    end
+    return lc_gm_say("warp speed set to " .. v .. " (" .. (v / 16.6667) .. "u/s), applied to " .. n ..
+        " ship(s); new ships inherit it")
+end
+
+-- Grant/refresh warp drive on every friendly hull (the mission installs it on
+-- players and freighters; this is the "just fix it" button).
+function lc_gm_grant_warp()
+    if not lc_gm_guard() then return "locked" end
+    ensure_ftl()
+    local n = 0
+    for _, p in ipairs(active_players()) do
+        if p:hasWarpDrive() then p:setWarpSpeed(WARP_SPEED) n = n + 1 end
+    end
+    return lc_gm_say("warp drive ensured on all friendly hulls at speed " .. WARP_SPEED .. " (" .. n .. " player ship(s))")
+end
+
+function lc_gm_difficulty(mode)
+    if not lc_gm_guard() then return "locked" end
+    local want = mode
+    if want == nil then want = STORY_MODE and "Normal" or "Story" end
+    if want ~= "Story" and want ~= "Normal" then
+        return lc_gm_say("difficulty must be Story or Normal, got " .. tostring(mode))
+    end
+    STORY_MODE = (want == "Story")
+    LC_DIFFICULTY = want
+    local changed = 0
+    for _, p in ipairs(active_players()) do
+        if STORY_MODE then
+            story_buff(p)
+        elseif story_off(p) then
+            changed = changed + 1
+        end
+    end
+    return lc_gm_say("difficulty is now " .. want .. (STORY_MODE and
+        " (beams one-shot; buffs applied to " .. #active_players() .. " ship(s))" or
+        " (original beam numbers restored on " .. changed .. " ship(s))"))
+end
+
+-- The brief's "the GM can spawn more ships": a fresh player hull at Lumina 1,
+-- hooked exactly like the first one (cargo-on-death, comms, story buffs).
+function lc_gm_spawn_ship(template)
+    if not lc_gm_guard() then return "locked" end
+    local tmpl = template
+    if tmpl == nil then
+        lc_gm_ship_idx = lc_gm_ship_idx % #GM_SHIP_TEMPLATES + 1
+        tmpl = GM_SHIP_TEMPLATES[lc_gm_ship_idx]
+    end
+    local x, y = stations.lumina:getPosition()
+    local p = PlayerSpaceship():setFaction("Human Navy"):setTemplate(tmpl)
+        :setPosition(x + random(-U(3), U(3)), y + random(-U(3), U(3)))
+        :setCallSign("Epsilon " .. (#active_players() + 1))
+    watch_player(p)
+    ensure_ftl()
+    return lc_gm_say("spawned a player ship (" .. tostring(tmpl) .. ") at Lumina 1")
+end
+
+-- Menu visibility, for tables where the GM wants no buttons at all. The
+-- lc_gm_* functions keep working either way - this only controls the buttons.
+function lc_gm_menu(on)
+    local want = on
+    if want == nil then want = not lc_gm_hidden end
+    lc_gm_hidden = not want and true or false
+    lc_gm_page = "main"
+    lc_gm_render()
+    return lc_gm_say("GM menu " .. (lc_gm_hidden and "hidden (lc_gm_* still callable)" or "shown"))
+end
+
+-- ---------- readouts ----------
+-- The GM console has no text fields, only buttons and messages, so every
+-- readout is an addGMMessage plus the same text in the log - which is also what
+-- makes the pages assertable from the autotest driver.
+function lc_gm_report(s)
+    LC_GM_CALLS = (LC_GM_CALLS or 0) + 1
+    lc_gm_last = s
+    for line in (s .. "\n"):gmatch("([^\n]*)\n") do print("LC-GM: " .. line) end
+    pcall(addGMMessage, s)
+    return s
+end
+
+function lc_gm_alive_count(group)
+    local n = 0
+    for _, s in ipairs(group or {}) do
+        if s ~= nil and s:isValid() then n = n + 1 end
+    end
+    return n
+end
+
+function lc_gm_guard_total()
+    local n = 0
+    for _, slot in ipairs(guard_slots) do n = n + slot.respawns_left end
+    return n
+end
+
+function lc_gm_status()
+    local alive, wrecked, crates = 0, 0, 0
+    for _, t in ipairs(transports) do
+        if t:isValid() then alive = alive + 1 else wrecked = wrecked + 1 end
+    end
+    for _, c in ipairs(containers) do
+        if c.a:isValid() then crates = crates + 1 end
+    end
+    return lc_gm_report("Lost Cluster, GM view\n" .. lc_status() .. "\n" ..
+        "phase=" .. phase .. " done=" .. tostring(done) ..
+        " clock=" .. string.format("%.0f", clock or 0) .. "s" ..
+        " difficulty=" .. tostring(LC_DIFFICULTY) .. " warp=" .. tostring(WARP_SPEED) .. "\n" ..
+        "components " .. part_delivered_count(PART_NAMES) .. "/6, playbooks " ..
+        part_delivered_count(BOOK_NAMES) .. "/3, containers on map " .. crates .. "/" .. #containers .. "\n" ..
+        "stations found: tampere=" .. tostring(found.tampere) .. " turku=" .. tostring(found.turku) ..
+        " lut=" .. tostring(found.lut) .. " | coordinates known: tampere=" .. tostring(known.tampere) ..
+        " turku=" .. tostring(known.turku) .. " lut=" .. tostring(known.lut) ..
+        " infini=" .. tostring(known.infini) .. "\n" ..
+        "scenes: tampere=" .. tampere_state .. " lut=" .. lut_state ..
+        " turku_greeted=" .. tostring(turku_greeted) .. "\n" ..
+        "phase3: armed=" .. tostring(phase3.armed) .. " warned=" .. tostring(phase3.warned) ..
+        " timer=" .. string.format("%.0f", phase3.timer or 0) .. " spawned=" .. tostring(phase3.spawned) .. "\n" ..
+        "freighters: " .. alive .. " alive, " .. wrecked .. " wrecked; guard respawns left " ..
+        lc_gm_guard_total() .. "\n" ..
+        "groups: ambush=" .. lc_gm_alive_count(groups.ambush) .. " lut=" .. lc_gm_alive_count(groups.lut) ..
+        " b300=" .. lc_gm_alive_count(groups.b300) .. " guards=" .. lc_gm_alive_count(groups.guards) ..
+        " wave=" .. lc_gm_alive_count(groups.wave) .. "\n" ..
+        "players: " .. #active_players() .. ", ambient: " .. ambient_stats.nebulae .. " nebulas, " ..
+        ambient_stats.rocks .. " rocks, " .. ambient_stats.wrecks .. " wrecks, " ..
+        ambient_stats.wormholes .. " wormholes")
+end
+
+function lc_gm_players()
+    local ps = active_players()
+    local s = "Player ships (" .. #ps .. "):\n"
+    for _, p in ipairs(ps) do
+        local x, y = p:getPosition()
+        local cargo = {}
+        for _, name in ipairs(PART_NAMES) do
+            local info = parts[name]
+            if info ~= nil and info.carried == p then table.insert(cargo, name) end
+        end
+        for _, name in ipairs(BOOK_NAMES) do
+            local info = parts[name]
+            if info ~= nil and info.carried == p then table.insert(cargo, name) end
+        end
+        -- NOTE: there is no getTemplate()/getName() on ships in this build's
+        -- script API, so the readout shows what the script really knows. [obs]
+        s = s .. "  " .. (p:getCallSign() or "?") ..
+            " hull=" .. string.format("%.0f", p:getHull()) .. " sector=" .. getSectorName(x, y) ..
+            " warp=" .. (p:hasWarpDrive() and tostring(p:getWarpSpeed()) or "no") ..
+            " watched=" .. tostring(p.lc_watched == true) ..
+            " cargo=" .. (#cargo > 0 and table.concat(cargo, ", ") or "empty") .. "\n"
+    end
+    return lc_gm_report(s)
+end
+
+function lc_gm_freighter_list()
+    if #transports == 0 then return lc_gm_report("No freighters yet - phase 2 spawns ten of them.") end
+    local s = "Freighters (" .. #transports .. "):\n"
+    for _, t in ipairs(transports) do
+        if t:isValid() then
+            local x, y = t:getPosition()
+            s = s .. "  " .. (t.lc_sign or "?") .. " sector=" .. getSectorName(x, y) ..
+                " book=" .. tostring(t.lc_book or "none") ..
+                " stopped=" .. tostring(t.lc_stopped == true) .. "\n"
+        else
+            s = s .. "  " .. (t.lc_sign or "?") .. " WRECKED (respawns on a 30 s watchdog)\n"
+        end
+    end
+    return lc_gm_report(s)
+end
+
+function lc_gm_containers()
+    local shown, junk = 0, 0
+    local s = "Containers (" .. #containers .. "):\n"
+    for _, c in ipairs(containers) do
+        if c.a:isValid() then
+            local x, y = c.a:getPosition()
+            if c.junk then junk = junk + 1 end
+            s = s .. "  " .. (c.revealed and (c.desc or "unlabelled") or "unlabelled") ..
+                " sector=" .. getSectorName(x, y) .. (c.junk and " (decoy)" or "") .. "\n"
+            shown = shown + 1
+        end
+    end
+    return lc_gm_report(s .. "on map: " .. shown .. ", of which decoys: " .. junk)
+end
+
+-- ---------- pages ----------
+-- The pager: a page is a function that adds its buttons; lc_gm_open() is how a
+-- "+Label" button dives one level deeper, "-Back" comes up. lc_gm_arg carries
+-- the subject of a detail page (a part name), because the button list is the
+-- only state the engine keeps.
+function lc_gm_open(page, arg)
+    lc_gm_page = page
+    lc_gm_arg = arg
+    lc_gm_render()
+end
+
+function lc_gm_back(page)
+    lc_gm_button("-Back", function() lc_gm_open(page) end)
+end
+
+function lc_gm_part_state(name)
+    local info = parts[name]
+    if info == nil then return "not placed" end
+    if info.delivered then return "delivered" end
+    if info.carried and info.carried ~= false then
+        return "in " .. (info.carried:getCallSign() or "a cargo bay")
+    end
+    if info.obj ~= nil and pcall(function() return info.obj:isValid() end) and info.obj:isValid() then
+        local x, y = info.obj:getPosition()
+        return "adrift " .. getSectorName(x, y)
+    end
+    return "not recovered"
+end
+
+function lc_gm_page_main()
+    -- The header is a readout: short on the button, the long version in the
+    -- message, because the cell cannot hold "phase 3, 6/6 parts, 3/3 convoys".
+    lc_gm_button("LC phase " .. phase, function() lc_gm_status() end)
+    lc_gm_button("+Components " .. part_delivered_count(PART_NAMES) .. "/" .. #PART_NAMES,
+        function() lc_gm_open("parts") end)
+    lc_gm_button("+Convoys " .. part_delivered_count(BOOK_NAMES) .. "/" .. #BOOK_NAMES,
+        function() lc_gm_open("books") end)
+    lc_gm_button("+Stations & hints", function() lc_gm_open("stations") end)
+    lc_gm_button("+Phase & finale", function() lc_gm_open("phase") end)
+    lc_gm_button("+Scenes & sweeps", function() lc_gm_open("scenes") end)
+    lc_gm_button("+Tuning & spawns", function() lc_gm_open("tuning") end)
+    lc_gm_button("+Ships & cargo", function() lc_gm_open("ships") end)
+    lc_gm_button("Status report", function() lc_gm_status() end)
+    lc_gm_button("Console commands", function() lc_gm_help() end)
+end
+
+function lc_gm_page_parts()
+    lc_gm_back("main")
+    lc_gm_button("Mark all delivered", function() lc_gm_mark_part("all") end)
+    lc_gm_button("Drop all crates", function() lc_gm_drop_part("all") end)
+    lc_gm_button("Announce locations", function() lc_gm_announce_part("all") end)
+    for _, name in ipairs(PART_NAMES) do
+        lc_gm_button(lc_gm_done(name) .. name, function() lc_gm_open("part", name) end)
+    end
+end
+
+-- A detail page's own name button: the label can hold the name or its state, not
+-- both, so clicking the name reports the state that did not fit. It takes the
+-- same argument forms as the other actions, so `lc_gm_part_info("all")` on the
+-- console is a one-line census of every crate.
+function lc_gm_part_info(arg)
+    local lines = {}
+    for _, name in ipairs(lc_gm_part_names(arg)) do
+        table.insert(lines, name .. ": " .. lc_gm_part_state(name))
+    end
+    return lc_gm_report(table.concat(lines, "\n"))
+end
+
+function lc_gm_page_part()
+    local name = lc_gm_arg
+    if name == nil then return lc_gm_open("parts") end
+    lc_gm_back("parts")
+    lc_gm_button(name, function() lc_gm_part_info(name) end)
+    lc_gm_button("Where is it?", function() lc_gm_announce_part(name) end)
+    lc_gm_button("Drop crate at crew", function() lc_gm_drop_part(name) end)
+    lc_gm_button("Mark delivered", function() lc_gm_mark_part(name) end)
+end
+
+function lc_gm_page_books()
+    lc_gm_back("main")
+    lc_gm_button("Halt all freighters", function() lc_gm_freighters(true) end)
+    lc_gm_button("Resume freighters", function() lc_gm_freighters(false) end)
+    lc_gm_button("Respawn freighters", function() lc_gm_respawn_freighter("all") end)
+    lc_gm_button("Freighter list", function() lc_gm_freighter_list() end)
+    lc_gm_button("Container list", function() lc_gm_containers() end)
+    for k, name in ipairs(BOOK_NAMES) do
+        lc_gm_button(lc_gm_done(name) .. "Playbook " .. k, function() lc_gm_open("book", name) end)
+    end
+end
+
+-- "Ansible Playbook 2 (of 3)" -> "Playbook 2": the whole label cannot fit, and
+-- the index is the only part that tells two of them apart on a button.
+function lc_gm_book_short(name)
+    return tostring(name):match("[Pp]laybook %d+") or tostring(name):sub(1, LC_GM_LABEL_MAX)
+end
+
+function lc_gm_page_book()
+    local name = lc_gm_arg
+    if name == nil then return lc_gm_open("books") end
+    lc_gm_back("books")
+    lc_gm_button(lc_gm_book_short(name), function() lc_gm_part_info(name) end)
+    lc_gm_button("Give to freighter", function() lc_gm_give_book(name) end)
+    lc_gm_button("Mark delivered", function() lc_gm_deliver_book(name) end)
+    lc_gm_button("Drop crate at crew", function() lc_gm_drop_part(name) end)
+    lc_gm_button("Sweep its guards", function() lc_gm_sweep("guards") end)
+    lc_gm_button("+Guard credits", function() lc_gm_guard_page() end)
+end
+
+function lc_gm_guard_page()
+    lc_gm_back("books")
+    lc_gm_button("respawns left: " .. lc_gm_guard_total(), function() lc_gm_guard_page() end)
+    lc_gm_button("Convoy +1 credit", function() lc_gm_guard_credits(1) end)
+    lc_gm_button("Convoy +3 credits", function() lc_gm_guard_credits(3) end)
+    lc_gm_button("Sweep the guards", function() lc_gm_sweep("guards") end)
+end
+
+function lc_gm_page_stations()
+    lc_gm_back("main")
+    lc_gm_button("Reveal all stations", function() lc_gm_reveal_station("all") end)
+    lc_gm_button("Reveal Tampere 1", function() lc_gm_reveal_station("tampere") end)
+    lc_gm_button("Reveal Turku 1", function() lc_gm_reveal_station("turku") end)
+    lc_gm_button("Reveal LUT 1", function() lc_gm_reveal_station("lut") end)
+    lc_gm_button("Give all hints", function() lc_gm_hint("all") end)
+    lc_gm_button("Hint Tampere+Turku", function() lc_gm_hint("tampere"); lc_gm_hint("turku") end)
+    lc_gm_button("Hint: LUT 1", function() lc_gm_hint("lut") end)
+    lc_gm_button("Hint Infiniband", function() lc_gm_hint("infini") end)
+end
+
+function lc_gm_page_phase()
+    lc_gm_back("main")
+    lc_gm_button("phase " .. phase .. (phase3.armed and " armed" or " not armed"),
+        function() lc_gm_open("phase") end)
+    lc_gm_button("Finish phase 1", function() lc_gm_phase2() end)
+    lc_gm_button("Deliver playbooks", function() lc_gm_deliver_book("all") end)
+    lc_gm_button(phase3.armed and "Disarm finale fleet" or "Arm finale fleet",
+        function() lc_gm_arm_phase3() end)
+    lc_gm_button("Spawn finale fleet", function() lc_gm_spawn_wave() end)
+    lc_gm_button("Declare victory", function() lc_gm_victory() end)
+end
+
+function lc_gm_page_scenes()
+    lc_gm_back("main")
+    lc_gm_button("Tampere 1 ambush", function() lc_gm_scene("tampere_ambush") end)
+    lc_gm_button("LUT 1 turns hostile", function() lc_gm_scene("lut_reveal") end)
+    lc_gm_button("Turku 1 greeting", function() lc_gm_scene("turku_greet") end)
+    lc_gm_button("B300 crate appears", function() lc_gm_scene("b300_drop") end)
+    for _, g in ipairs(lc_gm_group_names()) do
+        lc_gm_button("Sweep " .. g .. ": " .. lc_gm_alive_count(g == "freighters" and transports or groups[g]),
+            function() lc_gm_sweep(g) end)
+    end
+end
+
+function lc_gm_page_tuning()
+    lc_gm_back("main")
+    lc_gm_button("warp " .. tostring(WARP_SPEED) .. " " .. tostring(LC_DIFFICULTY),
+        function() lc_gm_open("tuning") end)
+    lc_gm_button("Warp: next step", function() lc_gm_warp() end)
+    for _, v in ipairs(GM_WARP_STEPS) do
+        lc_gm_button("Warp = " .. v, function() lc_gm_warp(v) end)
+    end
+    lc_gm_button("Give all warp drive", function() lc_gm_grant_warp() end)
+    lc_gm_button(STORY_MODE and "Switch to Normal" or "Switch to Story",
+        function() lc_gm_difficulty() end)
+    lc_gm_button("Ship at Lumina 1", function() lc_gm_spawn_ship() end)
+    lc_gm_button("Hostile by players", function() lc_gm_spawn_enemy() end)
+    lc_gm_button("Hide this menu", function() lc_gm_menu(false) end)
+end
+
+function lc_gm_page_ships()
+    lc_gm_back("main")
+    lc_gm_button("Player list", function() lc_gm_players() end)
+    lc_gm_button("Freighter list", function() lc_gm_freighter_list() end)
+    lc_gm_button("Container list", function() lc_gm_containers() end)
+    lc_gm_button("Ship at Lumina 1", function() lc_gm_spawn_ship() end)
+    lc_gm_button("Respawn freighters", function() lc_gm_respawn_freighter("all") end)
+    lc_gm_button("Reveal all labels", function() lc_gm_reveal_containers() end)
+end
+
+-- Detail page for "which container is where": labels on demand.
+function lc_gm_reveal_containers()
+    if not lc_gm_guard() then return "locked" end
+    lc_reveal_all()
+    return lc_gm_say("every container label revealed to the crew (" .. #containers .. " containers)")
+end
+
+function lc_gm_help()
+    return lc_gm_report("Lost Cluster, console commands (each line is Lua on the server):\n" ..
+        "  lc_gm_status()            lc_gm_players()       lc_gm_freighter_list()\n" ..
+        "  lc_gm_containers()        lc_gm_show(\"parts\")   lc_gm_menu(false)\n" ..
+        "  lc_gm_mark_part(\"all\")    lc_gm_mark_part(4)    lc_gm_drop_part(2)\n" ..
+        "  lc_gm_announce_part(\"all\")  lc_gm_phase2()      lc_gm_arm_phase3(true)\n" ..
+        "  lc_gm_spawn_wave()        lc_gm_victory()       lc_gm_scene(\"lut_reveal\")\n" ..
+        "  lc_gm_give_book(1)        lc_gm_deliver_book(\"all\")  lc_gm_freighters(true)\n" ..
+        "  lc_gm_respawn_freighter(\"Freighter 3\")  lc_gm_guard_credits(2)  lc_gm_sweep(\"wave\")\n" ..
+        "  lc_gm_warp(1500)          lc_gm_grant_warp()    lc_gm_difficulty(\"Story\")\n" ..
+        "  lc_gm_spawn_ship(\"Exguard\")  lc_gm_spawn_enemy(\"Piranha F12\")\n" ..
+        "  lc_gm_reveal_station(\"all\")  lc_gm_hint(\"all\")   lc_gm_reveal_containers()\n" ..
+        "  lc_gm_part_info(\"all\")      lc_gm_part_info(2)   (crate state, or all)")
+end
+
+lc_gm_pages = {
+    main = lc_gm_page_main,
+    parts = lc_gm_page_parts,
+    part = lc_gm_page_part,
+    books = lc_gm_page_books,
+    book = lc_gm_page_book,
+    guards = lc_gm_guard_page,
+    stations = lc_gm_page_stations,
+    phase = lc_gm_page_phase,
+    scenes = lc_gm_page_scenes,
+    tuning = lc_gm_page_tuning,
+    ships = lc_gm_page_ships,
+}
+
+-- Rebuild the whole button list for the current page. The engine keeps no page
+-- structure, so this is the pager: clear, then let one page function add its own
+-- buttons. Called after every action so a second GM (or a stale page) can never
+-- leave a dead button on screen.
+function lc_gm_render()
+    local before = LC_GM_BUTTONS or 0
+    pcall(clearGMFunctions)
+    if lc_gm_hidden then
+        lc_gm_button("+Show LC menu", function() lc_gm_menu(true) end)
+    else
+        local fn = lc_gm_pages[lc_gm_page] or lc_gm_pages.main
+        fn()
+    end
+    -- The page swap gets its own audit line, and deliberately not through
+    -- lc_gm_log(): a redraw must never overwrite the action result that the
+    -- driver (or a GM reading the log) just asked for.
+    print("LC-GM: page " .. lc_gm_page .. " drawn, " .. ((LC_GM_BUTTONS or 0) - before) .. " button(s)")
+end
+
+-- Called from init(): one pcall so a missing GM API can never break the mission.
+function lc_gm_boot()
+    local ok, err = pcall(lc_gm_render)
+    print("LC-GM: menu=" .. LC_GM_MENU .. " page=" .. lc_gm_page .. " rendered=" .. tostring(ok) ..
+        (ok == false and (" err=" .. tostring(err)) or ""))
+    return ok
+end
+
 -- ========================= test hooks =========================
--- For headless testing via the console:  callscriptfunction probe_state  etc.
+-- This build has no callscriptfunction(); a LUA console line IS Lua, so the
+-- console doorway is simply `probe_state()` / `lc_gm_status()` etc. The
+-- autotest driver runs in this same chunk and calls them directly. [obs]
 function probe_state()
     print("LC-STATE phase=" .. phase .. " done=" .. tostring(done) ..
         " tampere=" .. tampere_state .. " lut=" .. lut_state ..
@@ -1792,10 +2858,8 @@ function probe_kill_group(name)
 end
 
 function probe_deliver_all()
-    for _, n in ipairs(PART_NAMES) do
-        parts[n] = parts[n] or { carried = false, delivered = false }
-        parts[n].delivered = true
-    end
+    -- Same doorway the GM console uses, so the two can never drift apart.
+    for _, n in ipairs(PART_NAMES) do lc_gm_mark_part(n) end
     if phase == 1 and part_delivered_count(PART_NAMES) >= #PART_NAMES then
         phase2_start()
     end
@@ -1803,10 +2867,10 @@ function probe_deliver_all()
 end
 
 function probe_deliver_books()
-    for _, n in ipairs(BOOK_NAMES) do
-        parts[n] = parts[n] or { carried = false, delivered = false }
-        parts[n].delivered = true
-    end
+    for _, n in ipairs(BOOK_NAMES) do lc_gm_deliver_book(n) end
+    -- lc_after_delivery() arms it only when the mission is in phase 2 (the only
+    -- phase where playbooks exist); a shortcut timeline that skips straight here
+    -- still needs the finale armed, so the probe keeps its own explicit call.
     if part_delivered_count(BOOK_NAMES) >= #BOOK_NAMES then
         phase3.armed = true
     end

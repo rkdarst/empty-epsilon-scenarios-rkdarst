@@ -26,7 +26,8 @@ directory, from any repo, and from a copy on its own.
 | `EE_CONF_DIR` | throwaway `mktemp -d` | the game's HOME; set it only if you want persistent state |
 | `EE_SETTINGS` | unset | `K=V;K2=V2` injected as `getScenarioSetting` overrides |
 | `AUTOTEST` | discovered | driver path; `none` = boot and idle only |
-| `RUNTIME` / `SMOKE_TIMEOUT` / `SMOKE_SETTLE` / `GAP` | tuned defaults | timing |
+| `RUNTIME` | driver's `-- ee_runtime: N`, else 60 | wall-clock seconds a func run may take; an explicit value wins |
+| `SMOKE_TIMEOUT` / `SMOKE_SETTLE` / `GAP` | tuned defaults | timing |
 
 ## Exit codes
 

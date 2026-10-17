@@ -8,6 +8,10 @@
 -- Setting[Difficulty]: Mission difficulty.
 -- Difficulty[Normal|Default]: Standard balance.
 -- Difficulty[Story]: Story mode: player beams one-shot anything they hit.
+-- Setting[GMMenu]: Gamemaster console controls.
+-- GMMenu[Enabled|Default]: Add the mission-control buttons to the GM console.
+-- GMMenu[Disabled]: draws only a "menu (hidden)" button to bring it back; the
+-- gm_* functions stay callable from the console either way (see gm_menu).
 
 -- =====================================================================
 -- Scenario skeleton. Patterns: ee-skills/patterns/ ; verified facts:
@@ -314,6 +318,7 @@ function init()
 
     notify([[Home to Epsilon: two components are missing from the convoy route.
 Recover them and bring them back - dock or come alongside to hand them over.]], stations.home)
+    pcall(gm_boot)      -- GM console: never let a missing GM API break the mission
     print("SC: init complete, difficulty=" .. DIFFICULTY)
 end
 
@@ -356,15 +361,34 @@ function update(delta)
 end
 
 function story_buff(p)                    -- there is no setBeamDamage() in 2024.12
+    if p.scen_beams ~= nil then return end   -- already buffed; called per new hull
+    local save, n = {}, 0
     for i = 0, 15 do
         local ok, arc = pcall(p.getBeamWeaponArc, p, i)
         if ok and arc and arc > 0 then
             local _, dir = pcall(p.getBeamWeaponDirection, p, i)
             local _, rng = pcall(p.getBeamWeaponRange, p, i)
             local _, cyc = pcall(p.getBeamWeaponCycleTime, p, i)
-            pcall(p.setBeamWeapon, p, i, arc, dir, rng, cyc, 5000)
+            local _, dmg = pcall(p.getBeamWeaponDamage, p, i)
+            save[i] = { arc = arc, dir = dir, rng = rng, cyc = cyc, dmg = dmg }
+            if pcall(p.setBeamWeapon, p, i, arc, dir, rng, cyc, 5000) then n = n + 1 end
         end
     end
+    -- Snapshot what we overwrote: setBeamWeapon is absolute, so a difficulty
+    -- toggle that cannot restore would only ever ratchet (patterns/gm-console.md).
+    if n > 0 then p.scen_beams = save end
+    print("SC: story buff on " .. (p:getCallSign() or "?") .. ", " .. n .. " beam(s)")
+end
+
+function story_off(p)
+    local save = p.scen_beams
+    if save == nil then return false end
+    for i, b in pairs(save) do
+        pcall(p.setBeamWeapon, p, i, b.arc, b.dir, b.rng, b.cyc, b.dmg)
+    end
+    p.scen_beams = nil
+    print("SC: story buff removed from " .. (p:getCallSign() or "?"))
+    return true
 end
 
 -- ========================= phase machine =========================
@@ -428,6 +452,309 @@ function act_deliver(station, ship)
     if n == 0 then return "Your cargo bay holds nothing we need." end
     return ("Received %d item(s); %d of %d accounted for."):format(
         n, delivered_count(), #PART_NAMES)
+end
+
+-- ========================= gamemaster console =========================
+-- One API call is one button; there is no nesting, so a "page" is our own list
+-- swap (+Label opens, -Back closes - what the shipped missions do). Two engine
+-- rules shape this block: a callback needs the globals table as upvalue #1
+-- (hence the closure with math.abs(0) in gm_button), and the button list belongs
+-- to the script rather than to a GM, so every action re-renders its page.
+-- Every action is also a plain global: the doorway for the LUA console and for
+-- the autotest driver, which cannot click.  patterns/gm-console.md
+
+GM_MENU = getScenarioSetting("GMMenu")
+if GM_MENU == nil or GM_MENU == "" then GM_MENU = "Enabled" end
+gm_page, gm_arg = "main", nil
+gm_hidden = (GM_MENU == "Disabled")
+
+function gm_log(msg)
+    GM_CALLS, gm_last = (GM_CALLS or 0) + 1, msg     -- audit trail the driver asserts
+    print("SC-GM: " .. msg)
+    return msg
+end
+
+function gm_say(msg)
+    gm_log(msg)
+    pcall(addGMMessage, "SC: " .. msg)
+    return msg
+end
+
+function gm_guard()
+    if done then
+        gm_say("mission already finished - controls are locked")
+        return false
+    end
+    return true
+end
+
+-- The GM cell is a fixed width and CENTERS its text, so a label longer than the
+-- cell loses both ends - which is exactly the verb a GM needs to read. Budget the
+-- labels here (20 chars fits; 23 was the observed limit in EE-2024.12.08) and let
+-- the driver fail on the counter instead of a human noticing clipped buttons.
+GM_LABEL_MAX = 20
+GM_LABEL_OVER = GM_LABEL_OVER or 0
+GM_LABEL_LONGEST = GM_LABEL_LONGEST or 0
+gm_label_longest_text = ""
+
+function gm_label(label)
+    label = tostring(label)
+    if #label > GM_LABEL_LONGEST then
+        GM_LABEL_LONGEST = #label
+        gm_label_longest_text = label
+    end
+    if #label <= GM_LABEL_MAX then return label end
+    GM_LABEL_OVER = GM_LABEL_OVER + 1
+    print("SC-GM: label over the " .. GM_LABEL_MAX .. "-char budget (" .. #label .. "): " .. label)
+    return label:sub(1, GM_LABEL_MAX - 3) .. "..."
+end
+
+-- One console button. The closure keeps the globals table as upvalue #1 (the
+-- engine converts it into a ScriptSimpleCallback and checks exactly that).
+function gm_button(label, fn)
+    GM_BUTTONS = (GM_BUTTONS or 0) + 1
+    local shown = gm_label(label)
+    local ok, err = pcall(addGMFunction, shown, function()
+        math.abs(0) -- ScriptSimpleCallback wants the globals table as upvalue #1
+        return fn()
+    end)
+    if ok == false then print("SC-GM: addGMFunction(" .. shown .. ") failed: " .. tostring(err)) end
+    return ok
+end
+
+function gm_open(page, arg)
+    gm_page, gm_arg = page, arg
+    gm_render()
+end
+
+function gm_back(page)
+    gm_button("-Back", function() gm_open(page) end)
+end
+
+-- ---------- actions: guarded, idempotent, logged ----------
+function gm_part_state(name)
+    local info = parts[name]
+    if info == nil then return "not placed" end
+    if info.delivered then return "delivered" end
+    if info.carried and info.carried ~= false then return "in a cargo bay" end
+    if info.obj ~= nil and pcall(function() return info.obj:isValid() end) and info.obj:isValid() then
+        return "adrift"
+    end
+    return "not recovered"
+end
+
+function gm_part_names(arg)
+    if arg == nil or tostring(arg) == "all" then return PART_NAMES end
+    local s, out = tostring(arg), {}
+    for _, n in ipairs(PART_NAMES) do if n == s then return { n } end end
+    local i = tonumber(s:match("^(%d+)$"))
+    if i ~= nil and PART_NAMES[i] then return { PART_NAMES[i] } end
+    return out
+end
+
+-- The GM shortcut for "they found it". It changes the world through the same
+-- bookkeeping the comms hand-over uses, so a button cannot skip a phase.
+function gm_mark_part(arg)
+    if not gm_guard() then return "locked" end
+    local n, skipped = 0, 0
+    for _, name in ipairs(gm_part_names(arg)) do
+        local info = parts[name]
+        if info == nil then
+            parts[name] = { carried = false, delivered = false }
+            info = parts[name]
+        end
+        if info.delivered then
+            skipped = skipped + 1
+        else
+            if info.carried and info.carried ~= false then info.carried = false end
+            if info.obj ~= nil and pcall(function() return info.obj:isValid() end) and info.obj:isValid() then
+                info.obj:destroy()          -- artifacts carry no hooks
+            end
+            info.obj = nil
+            info.delivered = true
+            n = n + 1
+        end
+    end
+    phase_check()
+    return gm_say("marked " .. n .. " part(s) delivered, " .. skipped .. " already done; " ..
+        delivered_count() .. "/" .. #PART_NAMES .. " accounted for, phase=" .. phase)
+end
+
+-- Put a crate next to the crew (refusing while it is in a bay or delivered, so
+-- the world cannot end up holding the same part twice).
+function gm_drop_part(arg)
+    if not gm_guard() then return "locked" end
+    local ps = active_players()
+    local x, y = stations.home:getPosition()
+    if #ps > 0 then x, y = ps[1]:getPosition() end
+    local n, refused = 0, 0
+    for _, name in ipairs(gm_part_names(arg)) do
+        local info = parts[name]
+        if info == nil then
+            parts[name] = { carried = false, delivered = false }
+            info = parts[name]
+        end
+        local adrift = info.obj ~= nil and pcall(function() return info.obj:isValid() end) and info.obj:isValid()
+        if info.delivered or (info.carried and info.carried ~= false) then
+            refused = refused + 1
+        elseif adrift then
+            info.obj:setPosition(x + U(2), y)
+            n = n + 1
+        else
+            mk_part(name, x + U(2), y)
+            n = n + 1
+        end
+    end
+    return gm_say("placed " .. n .. " crate(s) beside the crew, " .. refused .. " refused")
+end
+
+-- ---------- readouts ----------
+function gm_status()
+    local s = "GM view: phase=" .. phase .. " done=" .. tostring(done) ..
+        " clock=" .. string.format("%.0f", clock or 0) .. "s\n" ..
+        "parts " .. delivered_count() .. "/" .. #PART_NAMES ..
+        "  warp=" .. tostring(WARP_SPEED) .. "  difficulty=" .. tostring(DIFFICULTY) .. "\n" ..
+        "players=" .. #active_players()
+    for _, name in ipairs(PART_NAMES) do
+        s = s .. "\n  " .. name .. ": " .. gm_part_state(name)
+    end
+    for line in (s .. "\n"):gmatch("([^\n]*)\n") do print("SC-GM: " .. line) end
+    pcall(addGMMessage, s)
+    return s
+end
+
+-- ---------- tuning and spawns ----------
+function gm_warp(v)
+    if not gm_guard() then return "locked" end
+    WARP_SPEED = tonumber(v) or 1000
+    local players = active_players()
+    for _, p in ipairs(players) do
+        if p:hasWarpDrive() then p:setWarpSpeed(WARP_SPEED) end
+    end
+    ensure_ftl(players)      -- this build's helper needs the list, it has no default
+    return gm_say("warp speed is now " .. WARP_SPEED .. " for every friendly hull")
+end
+
+function gm_difficulty(mode)
+    if not gm_guard() then return "locked" end
+    local want = mode or (STORY_MODE and "Normal" or "Story")
+    STORY_MODE = (want == "Story")
+    DIFFICULTY = want
+    for _, p in ipairs(active_players()) do
+        if STORY_MODE then story_buff(p) else story_off(p) end
+    end
+    return gm_say("difficulty is now " .. want)
+end
+
+function gm_spawn_ship(tmpl)
+    if not gm_guard() then return "locked" end
+    local x, y = stations.home:getPosition()
+    local p = PlayerSpaceship():setFaction("Human Navy"):setTemplate(tmpl or "Atlantis")
+        :setPosition(x + U(2), y):setCallSign("Epsilon " .. (#active_players() + 1))
+    return gm_say("spawned a replacement hull: " .. p:getCallSign())
+end
+
+-- Kills go through damage, never destroy(): onDestruction is damage-only and the
+-- drop watchdogs are only the fallback (reference/runtime-pitfalls.md).
+function gm_sweep(name)
+    if not gm_guard() then return "locked" end
+    local group = groups[tostring(name)]
+    if group == nil then return gm_say("unknown group: " .. tostring(name)) end
+    local killed, wrecked = 0, 0
+    for _, s in ipairs(group) do
+        if s ~= nil and s:isValid() then
+            pcall(function() s:takeDamage(5000, "hull") end)
+            killed = killed + 1
+        else
+            wrecked = wrecked + 1
+        end
+    end
+    return gm_say("destroyed " .. killed .. " ship(s) in " .. tostring(name) ..
+        ", " .. wrecked .. " already wrecked")
+end
+
+function gm_victory()
+    if not gm_guard() then return "locked" end
+    done = true
+    notify("Mission complete.", stations.home)
+    victory("Human Navy")
+    return gm_say("victory declared for Human Navy")
+end
+
+-- ---------- pages ----------
+-- Labels are budgeted by gm_label(); the long version of any readout goes into
+-- the message a button pops, not onto the button.
+function gm_page_main()
+    gm_button("phase " .. phase, function() gm_status() end)
+    gm_button("+Components " .. delivered_count() .. "/" .. #PART_NAMES,
+        function() gm_open("parts") end)
+    gm_button("+Tuning & spawns", function() gm_open("tuning") end)
+    gm_button("Status report", function() gm_status() end)
+    gm_button("Console commands", function() gm_help() end)
+end
+
+function gm_page_parts()
+    gm_back("main")
+    gm_button("Mark all delivered", function() gm_mark_part("all") end)
+    gm_button("Drop all crates", function() gm_drop_part("all") end)
+    for i, name in ipairs(PART_NAMES) do
+        gm_button("Deliver " .. name, function() gm_mark_part(name) end)
+        gm_button("Drop " .. name, function() gm_drop_part(name) end)
+    end
+end
+
+function gm_page_tuning()
+    gm_back("main")
+    gm_button("warp " .. tostring(WARP_SPEED) .. " " .. tostring(DIFFICULTY),
+        function() gm_open("tuning") end)
+    gm_button("Warp = 1000", function() gm_warp(1000) end)
+    gm_button("Warp = 2000", function() gm_warp(2000) end)
+    gm_button("Toggle difficulty", function() gm_difficulty() end)
+    gm_button("Spawn a player ship", function() gm_spawn_ship() end)
+    gm_button("Sweep the patrol", function() gm_sweep("patrol") end)
+    gm_button("Sweep the wave", function() gm_sweep("wave") end)
+    gm_button("Declare victory", function() gm_victory() end)
+    gm_button("Hide this menu", function() gm_menu(false) end)
+end
+
+function gm_help()
+    local s = "console commands (a LUA console line is Lua in this build):\n" ..
+        "  gm_status()  gm_mark_part(\"all\")  gm_drop_part(1)  gm_warp(2000)\n" ..
+        "  gm_difficulty(\"Story\")  gm_spawn_ship(\"Atlantis\")  gm_sweep(\"wave\")\n" ..
+        "  gm_victory()  gm_menu(true)"
+    for line in (s .. "\n"):gmatch("([^\n]*)\n") do print("SC-GM: " .. line) end
+    pcall(addGMMessage, s)
+    return s
+end
+
+function gm_menu(on)
+    local want = on
+    if want == nil then want = not gm_hidden end
+    gm_hidden = not want and true or false
+    gm_page = "main"
+    gm_render()
+    return gm_say("GM menu " .. (gm_hidden and "hidden (gm_* still callable)" or "shown"))
+end
+
+gm_pages = { main = gm_page_main, parts = gm_page_parts, tuning = gm_page_tuning }
+
+function gm_render()
+    local before = GM_BUTTONS or 0
+    pcall(clearGMFunctions)
+    if gm_hidden then
+        gm_button("+Show Convoy menu", function() gm_menu(true) end)
+    else
+        (gm_pages[gm_page] or gm_pages.main)()
+    end
+    -- Not gm_log(): a redraw must not overwrite the action result just reported.
+    print("SC-GM: page " .. gm_page .. " drawn, " .. ((GM_BUTTONS or 0) - before) .. " button(s)")
+end
+
+function gm_boot()
+    local ok, err = pcall(gm_render)
+    print("SC-GM: menu=" .. GM_MENU .. " rendered=" .. tostring(ok) ..
+        (ok == false and (" err=" .. tostring(err)) or ""))
+    return ok
 end
 
 -- ========================= test hooks =========================

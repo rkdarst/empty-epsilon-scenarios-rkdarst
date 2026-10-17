@@ -16,6 +16,7 @@ enough to paste into a scenario; naming follows the demo scenario
 | [hidden-station.md](hidden-station.md) | hiding (and revealing) a station | `[src]` `[obs]` |
 | [radar-dark-tug.md](radar-dark-tug.md) | a needle-in-a-haystack search object | `[src]` `[obs]` |
 | [guard-respawn.md](guard-respawn.md) | station defences that respawn without duplicating | `[obs]` |
+| [gm-console.md](gm-console.md) | paged GM controls a human at the table can use (labels: 20 chars, centered) | `[src]` `[obs]` |
 | [notify-queue.md](notify-queue.md) | news that must reach the crew | `[ref]` `[obs]` |
 | [status-page.md](status-page.md) | the "where do I go now" dialog | `[obs]` |
 | [tuning-knobs.md](tuning-knobs.md) | a knob block you can actually re-tune | `[obs]` |

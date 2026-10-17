@@ -21,7 +21,13 @@ Portable Empty Epsilon scenario-authoring knowledge and tooling. Verified agains
    objects are always visible, `onDestruction` fires only on damage kills,
    artifacts never advance scan states, and station hull radii decide what
    "alongside" means.
-6. The API reference of the pinned build is `script_reference.html` inside the
+6. Before adding a Gamemaster console layer, read
+   [patterns/gm-console.md](patterns/gm-console.md): one `addGMFunction` call is
+   one button (paging is a script convention), a callback whose first upvalue is
+   not the globals table fails at registration, and a label gets about **20
+   characters** in a fixed-width cell that centers it — so a long label loses its
+   own verb.
+7. The API reference of the pinned build is `script_reference.html` inside the
    vendored release: `find vendor -name script_reference.html`.
 
 ## The five commands

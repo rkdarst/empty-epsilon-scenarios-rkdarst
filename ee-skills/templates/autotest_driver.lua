@@ -7,8 +7,12 @@
 -- loaded by the game as a mission). Override with AUTOTEST=path.lua.
 --
 -- Markers ee_func.sh greps:  EE-ASSERT ok|FAIL|ERROR  /  EE-AUTOTEST done
+--
+-- Timeline length: ee_func.sh takes its default RUNTIME from a header line of
+-- the form `-- ee_runtime: N` (see the bottom of this file), so a plain
+-- `ee_func.sh <scenario>` lets the whole schedule play out. ee_finish_at below
+-- is the in-world backstop that ends a run early once the timeline is done.
 
-ee_finish_at = 300              -- hard stop so a stalled phase cannot hang the run
 local t = {}                    -- scratch shared between steps
 
 -- ---------------------------------------------------------------- boot state
@@ -73,6 +77,7 @@ end)
 -- A fresh skeleton has no beats yet, so the timeline ends here. Raise this as you
 -- schedule steps above; ee_finish_at is only the backstop for a hung wait.
 ee_finish_at = 45
+-- ee_runtime: 60
 
 function ee_on_finish()
     ee_merc_retire()                 -- no stray hulls left in the world

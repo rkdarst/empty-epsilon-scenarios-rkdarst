@@ -39,7 +39,12 @@ what is repo-specific.
    same-faction objects are always visible (nebulae only shadow the long-range
    radar), `onDestruction` fires only on damage kills, artifacts never advance
    scan states, and station hull radii set what "alongside" and "ejected clear"
-   mean in units.
+   mean in units. Before adding a Gamemaster console layer, read
+   [ee-skills/patterns/gm-console.md](ee-skills/patterns/gm-console.md): one
+   `addGMFunction` call is one button, so paging is a script convention, a
+   callback whose first upvalue is not the globals table fails at registration,
+   and a button label gets about **20 characters** in a fixed-width cell that
+   centers the text — longer labels lose the verb at both ends.
 7. A scenario with real mechanics gets a design note next to it
    (`scenarios/scenario_NN_<name>.AGENTS-brief.txt`) and a driver in `tests/`.
    Never let a mechanic exist in the Lua with neither.

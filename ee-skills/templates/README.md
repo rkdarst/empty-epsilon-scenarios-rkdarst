@@ -8,7 +8,8 @@
 
 Both Lua templates are verified to parse and boot: the skeleton's `init()` runs
 clean and the driver's opening steps pass against it, so a new mission starts from
-something demonstrably working.
+something demonstrably working — including its GM console section, which renders
+its first page (`SC-GM: page main drawn, 5 button(s)`) during the boot check.
 
 ## Copy-paste commands
 
@@ -27,4 +28,7 @@ bin/ee_func.sh  <root>/scenarios/scenario_90_mine.lua          # discovers the d
 2. the **knob block** for the mission's scale (`SC`, `AMBIENT`);
 3. `PART_NAMES` / `init()` / `goal_done()` — the actual objective and map;
 4. one dialog page per station you actually use;
-5. then uncomment the driver's beat steps as you implement the beats.
+5. the **GM console** pages (`gm_page_*`) — keep the plumbing, replace the
+   buttons with the levers your mission actually needs
+   ([patterns/gm-console.md](../patterns/gm-console.md));
+6. then uncomment the driver's beat steps as you implement the beats.

@@ -29,6 +29,74 @@ The scenario browser shows a `Difficulty` picker for this scenario
   exposes no per-turret damage API.  The buff runs inside
   `watch_player()`, so late joiners and GM-spawned replacements get it
   too.
+  `story_buff()` snapshots each beam's real (arc, dir, range, cycle,
+  damage) tuple into `p.lc_save` before overwriting it, so
+  `story_off()` can give the exact numbers back; the mid-mission
+  toggle is `lc_gm_difficulty()` and the driver asserts the round trip.
+
+## Gamemaster console
+
+`Setting[GMMenu]` (Enabled by default) decides whether the scenario adds its
+buttons to the GM console; the `lc_gm_*` functions work either way, which is
+what makes the setting safe to default on.  With the menu off, `lc_gm_render()`
+draws exactly one button - the one that turns the menu back on - so a GM who
+started without it is never stuck, and a `GMMenu=Disabled` test run still
+exercises every action.  Paging is a convention, not an API:
+`addGMFunction` makes one button, so `lc_gm_render()` clears the list and lets
+one page function redraw its own (+Label / -Back, as in the shipped
+`scenario_88_chaos.lua`), and every action ends in a re-render because the list
+is script-wide, not per-GM  (ee-skills/patterns/gm-console.md).
+
+Pages: main, components, component detail, playbook convoys, playbook detail,
+guard credits, hidden stations/hints, phase & finale, scenes & sweeps, tuning &
+spawns, ships & cargo.  Readouts (status / players / freighters / containers)
+print to the log and pop up via `addGMMessage`.
+
+**Label budget: 20 characters.**  A GM button is a fixed-width cell that centers
+its text, so a longer label is cut at both ends and the verb is what disappears
+("Drop every missing crate nearby" arrives as "...missing crate...").  Every
+label goes through `lc_gm_label()`, which counts the overflow
+(`LC_GM_LABEL_OVER`) and the longest label seen, and the driver fails a run if a
+single label exceeds the budget - measured while rendering every page *and* every
+detail page, so a long data string cannot sneak one in.  What does not fit moves
+to a popup (`lc_gm_part_info`) or to a marker: `+` dives, `*` dives into a
+subject that is already delivered.  `[obs]`
+
+Playtest checklist (one click per page is enough to confirm the console on a live
+client; every action below is also driven headless):
+
+| Page | Click | Expect |
+|---|---|---|
+| main | `+Components 0/6` | the page swaps, six dive buttons appear |
+| components | `*B300 GPU nodes` (or `+`) | detail page; `*` only once delivered |
+| detail | the name button | popup: the state that will not fit on a label |
+| detail | `Where is it?` | the crew gets the location, log gets one `LC-GM:` line |
+| convoys | `*Playbook 1` -> `Give to freighter` | a freighter takes the cargo |
+| stations | `Reveal all stations` | contacts appear; coordinates stay hidden |
+| phase | `Arm finale fleet` -> `Disarm finale fleet` | the label flips, the timer does not fire |
+| scenes | `Sweep guards: 4` | that group dies by damage, crates drop |
+| tuning | `warp 1000 Normal` -> `Warp = 1500` | readout updates on the next render |
+| ships | `Reveal all labels` | every container label becomes readable |
+| any | `Hide this menu` -> `+Show LC menu` | one button restores the whole menu |
+
+Three invariants, asserted in the driver:
+
+- **Same doorway as the mission.** An action never invents its own bookkeeping:
+  `lc_gm_mark_part` / `lc_gm_deliver_book` run `lc_after_delivery()`, the exact
+  consequence code the comms hand-over runs, so a button cannot arm a phase the
+  players never reached.  `probe_deliver_all` / `probe_deliver_books` now call
+  the same functions.
+- **Kills go through damage.** `lc_gm_sweep` uses `takeDamage(5000, "hull")`,
+  never `destroy()`, because `onDestruction` is damage-only and the crate drops,
+  playbook spills and guard respawns hang off those hooks.
+- **Guarded, idempotent, logged.** Actions refuse to run once `done` is set,
+  a second press reports "already done" instead of doubling the world, and each
+  one writes one `LC-GM:` audit line (`lc_gm_last` / `LC_GM_CALLS` /
+  `LC_GM_BUTTONS` are the counters the driver asserts on).
+
+Console equivalence: every action is a plain global, so a GM at the host can
+type `lc_gm_phase2()`; this build has no `callscriptfunction()` — a LUA console
+line *is* Lua.  `lc_gm_help()` prints the command list.
 
 ## Scenario script
 
@@ -340,8 +408,12 @@ civilian freighter = Atlantis.
   any player ship is >=40u from Lumina 1; the hail is immediate, the
   invasion warps in 3 minutes later.
 - Win: Phase 3 invasion destroyed -> `victory("Human Navy")`.
-- Player death: GM spawns a replacement (in-game "Spawn player ship"
-  allowed); cargo drops as protected containers at the loss spot.
+- Player death: GM spawns a replacement (`lc_gm_spawn_ship()`, on the
+  GM console's "Tuning and spawns" page; it calls `watch_player()` and
+  `ensure_ftl()`, so the new hull gets the cargo-on-death hook, the
+  transfer comms handler, warp drive and any story buffs exactly like
+  the first ship).  Cargo drops as protected containers at the loss
+  spot, so a death never loses a part.
 
 ### Implementation notes (brief prose -> engine mechanics)
 

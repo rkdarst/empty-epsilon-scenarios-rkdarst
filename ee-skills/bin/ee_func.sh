@@ -30,7 +30,7 @@ BASE="$(basename "$SCEN")"
 ee_locate || exit 2
 
 CMDS="${1:-}"
-RUNTIME="${RUNTIME:-60}"; TIMEOUT="${SMOKE_TIMEOUT:-40}"; GAP="${GAP:-4}"
+RUNTIME="${RUNTIME:-}"; TIMEOUT="${SMOKE_TIMEOUT:-40}"; GAP="${GAP:-4}"
 
 name="${BASE%.lua}"
 BOOT_ONLY=0
@@ -43,6 +43,16 @@ if [[ -n "$DRIVER" && ! -f "$DRIVER" ]]; then
     echo "NOTE: no autotest driver at $DRIVER - booting and idling only" >&2
     DRIVER=""
 fi
+
+# A driver owns its own timeline: the length it declares in its header
+# (`-- ee_runtime: 80`) is the default, so a plain `ee_func.sh <scenario>` lets
+# the whole schedule play out. RUNTIME=N still overrides it from the outside.
+if [[ -z "$RUNTIME" && -n "$DRIVER" && -f "$DRIVER" ]]; then
+    declared="$(sed -n 's/^[[:space:]]*--[[:space:]]*ee_runtime:[[:space:]]*\([0-9]\{1,4\}\).*/\1/p' "$DRIVER" | head -1)"
+    RUNTIME="${declared:-60}"
+    [[ -n "$declared" ]] && echo "NOTE: RUNTIME=$RUNTIME taken from the driver's ee_runtime" >&2
+fi
+RUNTIME="${RUNTIME:-60}"
 
 EEHOME="$(mktemp -d)"; trap 'rm -rf "$EEHOME" "$EEHOME.fifo"' EXIT
 mkdir -p "$EEHOME/.emptyepsilon/scripts" "$EEHOME/run"
@@ -90,7 +100,7 @@ HOME="$EEHOME" EE_CONF_DIR="$EEHOME/.emptyepsilon" \
 LD_LIBRARY_PATH="${EE_LD}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
 ${EE_NS[@]+"${EE_NS[@]}"} \
-"$EE_BIN" headless="$BASE" server_port="${SMOKE_PORT:-35781}" < "$FIFO" > ee.log 2>&1 &
+"$EE_BIN" headless="$BASE" server_port="${SMOKE_PORT:-35781}" < "$FIFO" > ee.log 2>&1 9>&- &
 pid=$!
 exec 3>"$FIFO"
 loaded=0
@@ -116,6 +126,13 @@ for ((t=0; t<RUNTIME*2; t++)); do
     grep -qaE "$DONE_RE" ee.log && { sleep 3; break; }   # let stragglers log
     sleep 0.5
 done
+# Terminate, do not just SIGKILL: the netns wrapper in ee_env.sh reaps the game
+# from an EXIT trap, and a skipped trap used to leave a game running as PPid=1 -
+# still holding the runner lock fd and the server port, which stalled every
+# later run until it died. Give the trap a moment, then sweep its child, then kill.
+kill -TERM "$pid" 2>/dev/null
+for ((i = 0; i < 10; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+pkill -9 -P "$pid" 2>/dev/null
 kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 
 echo "--- script output ---------------------------------------------------------"

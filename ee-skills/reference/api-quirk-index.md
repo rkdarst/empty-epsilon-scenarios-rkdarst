@@ -16,6 +16,8 @@ One line per question we have actually had to answer. Tags as in
 | `getActivePlayerShips()` | present, destroyed ships leave no gaps `[ref]` |
 | `getScenarioSetting(k)` | present; `getScenarioVariation()` is the deprecated alias `[ref]` |
 | `setShortRangeRadarRange()` | present on stations (`pcall` it; 0 = dark, 5000 = default) `[obs]` |
+| `addGMFunction` / `clearGMFunctions` / `addGMMessage` / `getGMSelection` | present; the whole GM console surface `[ref]` `[obs]` |
+| `callscriptfunction()` | **absent** - a LUA console line *is* Lua, so call `probe_state()` directly `[obs]` |
 | `victory(faction)` | present `[ref]` |
 
 ## Behaviour surprises
@@ -35,6 +37,10 @@ One line per question we have actually had to answer. Tags as in
 | Whole tick aborted, "index a nil value" | read a field of an object destroyed earlier that tick | [pitfalls #10](runtime-pitfalls.md) |
 | Scenario listed under "Unknown" | header has no `Type:` line | [HEADER-FORMAT](../authoring/HEADER-FORMAT.md) |
 | Syntax error not reported by the smoke test | the engine logs the loader's error on a separate pattern | [testing/runner-anatomy.md](../testing/runner-anatomy.md) |
+| GM button never appeared, `Upvalue 1 of function is not a table` | the callback's first upvalue must be the globals table | [patterns/gm-console.md](../patterns/gm-console.md) |
+| GM page shows nothing / stale buttons | the list is one flat, script-wide list; re-render after every action | [patterns/gm-console.md](../patterns/gm-console.md) |
+| A console line did nothing in a headless run | the engine ignores stdin; the console lives in the client | [patterns/gm-console.md](../patterns/gm-console.md) |
+| GM label unreadable / cut off (what is left reads like `...crate nearby`) | the button cell is fixed-width and **centers** the text, so past ~20 chars both ends vanish - and the ends carry the verb | [patterns/gm-console.md](../patterns/gm-console.md) |
 
 ## Where to look for an answer
 

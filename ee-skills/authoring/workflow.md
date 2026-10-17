@@ -13,7 +13,7 @@ bin/ee_bootstrap.sh                       # game + runtime libs + boot check
 # 3. code
 cp templates/scenario_skeleton.lua scenarios/scenario_NN_name.lua
 #    header, then knobs -> helpers -> state -> builders -> init -> update
-#    -> dialogs -> probe hooks          (authoring/flow-diagrams.md has the model)
+#    -> dialogs -> GM console -> probe hooks   (authoring/flow-diagrams.md has the model)
 bin/ee_smoke.sh scenarios/scenario_NN_name.lua          # G2, run it after every edit
 
 # 4. tests
@@ -24,6 +24,11 @@ RUNTIME=600 AUTOTEST=none bin/ee_func.sh scenarios/scenario_NN_name.lua
 
 # 5. settings coverage: a branch never run is a branch that is broken
 EE_SETTINGS="Difficulty=Story" bin/ee_func.sh scenarios/scenario_NN_name.lua
+EE_SETTINGS="GMMenu=Disabled" bin/ee_func.sh scenarios/scenario_NN_name.lua
+#    A setting-aware driver asserts the hidden path itself (hidden menu draws
+#    only its un-hide button, actions still run, one click restores it). If the
+#    driver assumes the menu, add AUTOTEST=none so this at least proves the
+#    branch boots.
 
 # 6. play (G6) and iterate on the knobs, not the logic
 bin/ee_play.sh

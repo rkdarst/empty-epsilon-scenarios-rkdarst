@@ -4,6 +4,7 @@
 |---|---|
 | [runner-anatomy.md](runner-anatomy.md) | you want to know what the runner actually executes (chunk assembly, throwaway HOME, port guard, error and end markers, env knobs) |
 | [writing-drivers.md](writing-drivers.md) | you are writing or extending a driver in `tests/` |
+| [communication-testing.md](communication-testing.md) | you want to assert what the crew was *told* — push/persist/pull channels, descriptions, idle hints (spies, choke points, click-by-label) |
 | [runtime-surprises.md](runtime-surprises.md) | a run is green but something feels wrong, or a test passes that shouldn't |
 | [human-acceptance.md](human-acceptance.md) | the suite is green and it's time to actually play it |
 

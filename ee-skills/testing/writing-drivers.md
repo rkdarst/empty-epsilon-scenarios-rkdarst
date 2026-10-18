@@ -29,9 +29,13 @@ end
 | Helper | Use |
 |---|---|
 | `ee_step(t, fn)` | one action at game-second `t`, inside a pcall |
-| `ee_until(msg, deadline, fn)` | poll `fn()` every tick; PASS when true, FAIL at `deadline` game seconds |
+| `ee_wait(msg, deadline, fn, cont)` | poll like `ee_until`, then run `cont()` **once on success** — put outcome-dependent assertions in `cont` (the engine strips the coroutine library, so nothing truly blocks) `[obs]` |
+| `ee_until(msg, deadline, fn)` | **async** poll `fn()` every tick; PASS when true, FAIL at `deadline` game seconds |
 | `ee_check(cond, msg)` | one assertion line |
-| `ee_dlg_open(page_fn, target, source)` / `ee_dlg_click(d, i, target, source)` | drive the real dialog functions |
+| `ee_invariant(msg, fn)` | `fn()` must hold on EVERY tick from now to run end; first false fails (anti-softlock as runtime maths) |
+| `ee_spy(name)` / `ee_spy_seen(name, pattern, since)` | record calls to a scenario global (choke point) and match against them — see [communication-testing.md](communication-testing.md) |
+| `ee_expect_victory(faction)` | assert the faction the mission ends for (win vs defeat) |
+| `ee_dlg_open(page_fn, target, source)` / `ee_dlg_click(d, i, target, source)` / `ee_dlg_click_by_label(d, label, ...)` | drive the real dialog functions; prefer the label variant |
 | `ee_merc_squad(fac, x, y, target, pool, n)` / `ee_merc_retire()` / `ee_merc_dump(tag)` | organic kills |
 | `ee_eject_clear(msg, obj, station, hull_u, reach_u)` | container geometry assertion |
 | `ee_finish(reason)` / `ee_on_finish()` | end the run; `ee_finish_at` is the safety net |
@@ -39,12 +43,30 @@ end
 ## The three rules
 
 1. **Poll, never sample.** An AI kill, a warp transit or a respawn is done when
-   the *world* says so, not when your timeline says so. `ee_until` with a
-   generous deadline; `ee_check` only for instantaneous invariants.
+   the *world* says so, not when your timeline says so. `ee_wait`/`ee_until`
+   with a generous deadline; `ee_check` only for instantaneous invariants.
+   **Both are async** (the engine strips the coroutine library, so nothing can
+   block): they register a poll and return immediately — assertions that depend
+   on the outcome go in `ee_wait`'s `cont`, or in a *later* step. A same-step
+   `ee_check` after `ee_until` races the poll and can fail spuriously. `[obs]`
+   **Arm a wait AFTER its trigger when the deadline could land on the trigger
+   tick**: the harness pollers run *before* the scenario's `update()`, so a
+   top-level `ee_wait` whose deadline equals the triggering step's time fails
+   one tick before the world can react. Registering inside the step (deadline
+   counted from there) removes the race. `[obs]`
 2. **One timeline step per beat.** A step that both triggers a phase and asserts
-   its outcome is a step that fails for the wrong reason. Trigger, then `ee_until`.
+   its outcome is a step that fails for the wrong reason. Trigger, then verify
+   via `ee_wait(..., cont)` in the next step.
 3. **Print your state at every step boundary.** `probe_state()` /
    `ee_merc_dump()` lines are what make a failure readable in a 20 000-line log.
+
+## Communication assertions
+
+For asserting what the crew was *told* (push / persist / pull / descriptions /
+idle hints) — the spy-on-choke-point pattern, the click-by-label pattern and
+the honest headless limits — see
+[communication-testing.md](communication-testing.md).
+
 
 ## Organic killing
 
@@ -82,10 +104,15 @@ the sweet spot we measured.
 ```lua
 local d = ee_dlg_open(commsDepot, stations.depot, active_players()[1])
 ee_check(#d.msgs == 1, "page renders exactly one message")     -- contract, not taste
-local msgs = ee_dlg_click(d, 2, stations.depot, active_players()[1])
+local msgs = ee_dlg_click_by_label(d, "Hand over the components", stations.depot, active_players()[1])
 ee_check(#msgs == 1, "action renders one message")
 ee_check(msgs[1]:find("Received") ~= nil, "action took effect")
 ```
+
+Click **by label**, not by index: reply order is unstable while authoring, and
+an index click then hits the wrong reply silently (new replies must append
+after the originals). Assert the *text* of the reply, not just that the click
+ran — a dead click passes "runs without error" and fails the player.
 
 The walker stubs `setCommsMessage`/`addCommsReply` and invokes the *same* Lua
 functions the engine's dialog UI invokes, so a driver failure here is a real

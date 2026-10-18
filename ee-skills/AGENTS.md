@@ -52,7 +52,7 @@ headless boot can never receive from the GUI.
 | [reference/](reference/) | verified engine behaviour (scripting, pitfalls, sensors, geometry, AI, quirks) |
 | [patterns/](patterns/) | recipe per recurring problem, each with code + test + pitfalls |
 | [authoring/](authoring/) | header grammar, brief→code pipeline, flow diagrams, anti-softlock, player communication |
-| [testing/](testing/) | runner anatomy, driver authoring, runtime surprises, human acceptance |
+| [testing/](testing/) | runner anatomy, driver authoring, communication testing, runtime surprises, human acceptance |
 | [templates/](templates/) | scenario skeleton, driver skeleton, mission-brief template |
 | [bin/](bin/) | the tooling (`ee_env.sh` holds the shared discovery logic) |
 | [lib/autotest.lua](lib/autotest.lua) | generic assertion harness, concatenated at test time |

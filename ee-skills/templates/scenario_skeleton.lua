@@ -222,6 +222,18 @@ function notify(msg, from)
     table.insert(msgq, { msg = msg, from = from, until_s = clock + 25, done = {} })
 end
 
+-- Persist-channel choke point: every ship-log write goes through log(),
+-- never a raw addToShipLog - one named function is what makes the channel
+-- spy-able in a driver (ee_spy("log"); see testing/communication-testing.md).
+-- Mirrors to every active player, like the notify queue does.
+function log(msg, color)
+    for _, p in ipairs(active_players()) do
+        local ok = pcall(function() p:addToShipLog(msg, color) end)
+        if not ok then print("SC-LOG: addToShipLog failed: " .. tostring(msg)) end
+    end
+    return msg
+end
+
 function pump_messages()
     if #msgq == 0 then return end
     local players = active_players()

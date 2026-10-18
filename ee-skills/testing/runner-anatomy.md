@@ -105,6 +105,11 @@ Consequences worth remembering:
 * `EE-AUTOTEST done:` — the generic harness finished (see
   [writing-drivers.md](writing-drivers.md)).
 * `EE-ASSERT FAIL|ERROR` — an assertion failed; exit 1.
+* **Engine script errors** — `script error`, `attempt to call/index/...`,
+  `bad argument` lines fail the run *even when the done marker printed*: a
+  scenario erroring every tick used to still report `AUTOTEST PASSED`. A
+  known-benign line can be whitelisted per line with `EE_ERROR_ALLOW` (a regex
+  applied after the gate pattern). `[obs]`
 * Legacy `LC-ASSERT` / `LC-AUTOTEST` markers are still recognised so older
   drivers work unchanged.
 * `mission complete - victory declared` — the mission ended on its own; treated as
@@ -119,6 +124,7 @@ Consequences worth remembering:
 | `EE_ROOT` | project root, for driver discovery (`$EE_ROOT/tests/<name>.autotest.lua`) |
 | `AUTOTEST` | driver path; `none` = boot and idle only |
 | `EE_SETTINGS` | `K=V;K2=V2` injected as `getScenarioSetting` overrides |
+| `EE_ERROR_ALLOW` | regex of known-benign engine error lines whitelisted by the script-error gate (see end/exit markers above) |
 | `RUNTIME` / `SMOKE_TIMEOUT` / `SMOKE_SETTLE` / `GAP` | timing |
 | `EE_LOCK` / `EE_LOCK_TIMEOUT` | runner lock file / wait time (see below) |
 | `SMOKE_EE_TAG` / `EE_TAG` | pin a vendored release |

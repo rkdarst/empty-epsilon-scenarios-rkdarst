@@ -53,6 +53,7 @@ The second column is the 30-minute session in
 | Containers appear twice | a hook *and* an uncapped watcher; cap the watcher's drops |
 | `delta` is 0 for some ticks | paused world (headless starts paused) |
 | Driver steps pass but the world is empty (`players=0`, `stations.x` nil) | a **top-level error in the assembled chunk** stopped Lua before the scenario's `init()`; the definitions survive, so `update()` and the driver keep ticking. Read the `init complete` census line before believing a green run ([runner-anatomy.md](runner-anatomy.md)) |
+| Driver code using `coroutine.*` errors with *attempt to index a nil value (global 'coroutine')* | the engine's Lua sandbox **strips the coroutine library** — no blocking waits, no yields, ever. "Wait, then continue" must be expressed as poll+continuation (`ee_wait(msg, deadline, fn, cont)`) or a later `ee_step` `[obs]` |
 
 ## Debugging order that works
 

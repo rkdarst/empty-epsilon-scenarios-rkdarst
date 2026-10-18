@@ -121,6 +121,11 @@ fi
 
 DONE_RE='EE-AUTOTEST done|LC-AUTOTEST done|mission complete - victory declared'
 FAIL_RE='EE-ASSERT FAIL|EE-ASSERT ERROR|LC-ASSERT FAIL|LC-ASSERT ERROR'
+# Runtime script errors: a scenario erroring on every tick still prints its
+# done marker, so "AUTOTEST PASSED" used to be reachable from a broken world.
+# Gate on the engine's error lines too. EE_ERROR_ALLOW is a regex of known-
+# benign lines to whitelist (checked per line, after the gate pattern).
+ERR_RE='script error|attempt to (call|index|perform|compare|concatenate)|bad argument'
 for ((t=0; t<RUNTIME*2; t++)); do
     kill -0 "$pid" 2>/dev/null || break
     grep -qaE "$DONE_RE" ee.log && { sleep 3; break; }   # let stragglers log
@@ -137,8 +142,17 @@ kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 
 echo "--- script output ---------------------------------------------------------"
 grep -aE 'LUA:|ERROR' ee.log | sed -E 's/^(INFO: )?LUA:/LUA:/'
+if [ -n "${EE_ERROR_ALLOW:-}" ]; then
+    ERR_HITS="$(grep -aE "$ERR_RE" ee.log | grep -avE "$EE_ERROR_ALLOW" || true)"
+else
+    ERR_HITS="$(grep -aE "$ERR_RE" ee.log || true)"
+fi
 if grep -qaE "$FAIL_RE" ee.log; then
     echo "RESULT: FAILURES PRESENT"; exit 1
+elif [ -n "$ERR_HITS" ]; then
+    echo "RESULT: FAILED - engine script errors (whitelist known-benign lines with EE_ERROR_ALLOW):"
+    echo "$ERR_HITS" | head -20
+    exit 1
 elif grep -qaE "$DONE_RE" ee.log; then
     echo "RESULT: AUTOTEST PASSED"; exit 0
 fi

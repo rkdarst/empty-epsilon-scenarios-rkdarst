@@ -46,6 +46,7 @@ LC_FIND_U = 6        -- a hidden station stops hiding at this range. The player
 LC_HANDOVER_U = 1    -- how close to Lumina 1 you must be to hand hardware over
                      -- (docking always counts, whatever the distance).
 LC_REVEAL_U = 5      -- cargo-container shipping labels become readable here.
+LC_IDLE_S = 240      -- no-progress seconds before Lumina 1 re-sends the hint
 TURKU_NEB = 10       -- nebulas hiding Turku 1's caches (was 7)
 TURKU_R_MIN, TURKU_R_MAX = 10, 18  -- ring they are scattered on. A nebula has
                                   -- a 5U radius (notes/06), so this spacing
@@ -209,6 +210,12 @@ lc_msgq = {}
 
 function lc_notify(msg, from)
     table.insert(lc_msgq, { msg = msg, from = from, until_s = clock + 25, done = {} })
+    -- Persist channel (player-communication audit item 3): the same line into
+    -- every active ship's log, so the crew can re-read it after the comms
+    -- popup is gone. pcall: a hull can die mid-loop.
+    for _, p in ipairs(active_players()) do
+        pcall(function() p:addToShipLog(msg, "Gray") end)
+    end
 end
 
 function lc_pump_messages()
@@ -764,6 +771,7 @@ function mk_station(name, tmpl, fac, x, y, fn)
     local s = SpaceStation():setTemplate(tmpl):setFaction(fac):setPosition(x, y)
     s:setCallSign(name)
     s.lc_template = tmpl     -- hull radius lookups (STATION_HULL_U)
+    s.lc_x, s.lc_y = x, y    -- stations never move; remembered for the loss watch
     if fn then
         local st = s
         -- Bind the target via closure: comms *functions* are documented to
@@ -1461,6 +1469,73 @@ function drop_watch_books()
     end
 end
 
+-- ========================= station-loss & idle watches =========================
+-- A mission station can still be destroyed (stray Kraylor fire, phase-3 wave
+-- splash, the GM). Turku 1 and Kajaani 1 hold no mission parts (the Turku
+-- caches spawn in open space at init), but Tampere 1 and LUT 1 each hold one:
+-- if the station dies before its part is recovered, the part spills adrift at
+-- the wreck - the same "a death never loses a part" rule the cargo follows.
+-- The state also retires so nothing leashes or comms-polls a dead anchor
+-- (leash() calls anchor:getPosition(), which errors on a destroyed object).
+function watch_stations()
+    local spills = {
+        { key = "tampere", label = "Tampere 1", part = "H200 GPU nodes",
+          retire = function() tampere_state = "clear" end },
+        { key = "lut", label = "LUT 1", part = "AMD compute nodes",
+          retire = function() lut_state = "lost" end },
+    }
+    for _, s in ipairs(spills) do
+        local st = stations[s.key]
+        if st ~= nil and not st.lc_dead and not st:isValid() then
+            st.lc_dead = true
+            s.retire()
+            local info = parts[s.part]
+            if info ~= nil and not info.delivered and not info.carried
+               and not part_out_there(s.part) then
+                mk_part(s.part, st.lc_x or 0, st.lc_y or 0)
+                lc_notify(s.label .. " has been destroyed. Its cluster component, " ..
+                    s.part .. ", spilled adrift near sector " ..
+                    getSectorName(st.lc_x or 0, st.lc_y or 0) .. ".")
+            else
+                lc_notify(s.label .. " has been destroyed.")
+            end
+            print("LC: " .. s.label .. " lost - part spilled if unaccounted")
+        end
+    end
+end
+
+-- Idle hint (player-communication audit item 7): after LC_IDLE_S seconds with
+-- no observable progress, Lumina 1 re-sends a line that names the next step.
+-- Any change in the progress key resets the clock, so the hint never talks
+-- over an active beat, and it duplicates what hailing Lumina 1 answers anyway.
+lc_idle_prog = nil
+lc_idle_mark = 0
+function watch_idle(players)
+    if #players == 0 then return end
+    local prog = table.concat({ tostring(phase),
+        part_delivered_count(PART_NAMES), part_delivered_count(BOOK_NAMES),
+        tostring(tampere_state), tostring(lut_state) }, ":")
+    if prog ~= lc_idle_prog then
+        lc_idle_prog = prog
+        lc_idle_mark = clock
+        return
+    end
+    if clock - lc_idle_mark >= LC_IDLE_S then
+        lc_idle_mark = clock
+        if phase == 1 then
+            lc_notify("Lumina 1: we still lack cluster components. Hail us for " ..
+                "the latest status - our hints say who holds what.", stations.lumina)
+        elseif phase == 2 then
+            lc_notify("Lumina 1: the playbooks ride the freighters running " ..
+                "between the five stations. Deep-scan them, order a stop, pull " ..
+                "alongside, and hail to transfer.", stations.lumina)
+        else
+            lc_notify("Lumina 1: the Kraylor wave is still out there. Break it " ..
+                "and the cluster lives.", stations.lumina)
+        end
+    end
+end
+
 -- ========================= update & triggers =========================
 clock = 0
 book_transport = {}
@@ -1469,7 +1544,20 @@ function update(delta)
     clock = clock + delta
     if done then return end
     local players = active_players()
+    -- Defeat (anti-softlock test d): Lumina 1 is the delivery target AND the
+    -- phase-3 wave's target. If it dies (wave, GM removal, stray fire) there
+    -- is no cluster to rebuild and no one to deliver to - end the mission
+    -- instead of hanging, or handing out a victory over debris. Checked before
+    -- the pump, because the pump's dead-sender fallback is Lumina itself.
+    if not stations.lumina:isValid() then
+        done = true
+        lc_notify("Lumina 1 has gone dark. Without the home station, the cluster is lost.")
+        print("LC: Lumina 1 lost - defeat")
+        victory("Kraylor")
+        return
+    end
     ensure_ftl(players)
+    watch_idle(players)      -- communication audit item 7: the idle hint
     lc_pump_messages()
 
     -- Late joiners and GM respawns: cargo-eject hook + transfer comms on
@@ -1509,7 +1597,7 @@ function update(delta)
     -- Discovery of the hidden stations: neutral -> ours, and the relay telemetry
     -- bubble comes back up (station_reveal is idempotent).
     for _, name in ipairs({ "tampere", "turku", "lut" }) do
-        if not found[name] then
+        if not found[name] and stations[name] ~= nil and stations[name]:isValid() then
             for _, p in ipairs(players) do
                 if d2(p, stations[name]) < U(LC_FIND_U) ^ 2 then
                     station_reveal(name)
@@ -1522,8 +1610,12 @@ function update(delta)
     -- Container-drop safety net (hookless deaths must not softlock the mission).
     drop_watch(delta)
 
+    -- Station-loss safety net: spill a held part and retire leash states
+    -- before any block below can poll a dead anchor.
+    watch_stations()
+
     -- Tampere 1: ambush on first approach.
-    if tampere_state == "waiting" then
+    if tampere_state == "waiting" and stations.tampere:isValid() then
         for _, p in ipairs(players) do
             if d2(p, stations.tampere) < U(20) ^ 2 then
                 tampere_ambush()
@@ -1539,7 +1631,7 @@ function update(delta)
     end
 
     -- Turku 1 greets arriving ships.
-    if not turku_greeted then
+    if not turku_greeted and stations.turku:isValid() then
         for _, p in ipairs(players) do
             if d2(p, stations.turku) < U(20) ^ 2 then
                 turku_greet()
@@ -1549,7 +1641,7 @@ function update(delta)
     end
 
     -- LUT 1: the trap, the taunts, the liberation.
-    if lut_state == "friendly" then
+    if lut_state == "friendly" and stations.lut:isValid() then
         for _, p in ipairs(players) do
             if d2(p, stations.lut) < U(20) ^ 2 then
                 lut_reveal()

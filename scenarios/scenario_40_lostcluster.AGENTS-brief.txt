@@ -488,3 +488,48 @@ civilian freighter = Atlantis.
 1. Difficulty: are the group sizes above right for the intended crew?
 2. Phase 3: single final battle (current default), or several attrition
    waves?
+
+## Compliance update (2026-10-18: anti-softlock + player-communication audit)
+
+Gaps the audit found in this scenario, now fixed in code and guarded by tests:
+
+- **Defeat path (was missing entirely).** Lumina 1 is the only delivery target
+  AND the phase-3 wave's target; its death (GM removal, stray Kraylor fire, the
+  wave winning) now declares defeat - `victory("Kraylor")` - instead of hanging
+  (phases 1-2) or declaring victory over debris (phase 3). Guarded by
+  tests/scenario_40_lostcluster.defeat.autotest.lua:
+    AUTOTEST=tests/scenario_40_lostcluster.defeat.autotest.lua \
+      ./tools/func_test.sh scenarios/scenario_40_lostcluster.lua
+- **Station loss.** Tampere 1 / LUT 1 destroyed before their part (H200 / AMD
+  compute nodes) is recovered: the part spills adrift at the wreck, with the
+  sector named in the notification - the same "a death never loses a part"
+  rule the cargo follows. The ambush/liberation state retires so nothing
+  leashes or comms-polls a dead anchor (`leash()` errors on one). Turku 1 and
+  Kajaani 1 hold no parts (the Turku caches spawn in open space at init).
+- **Idle hints (player-communication audit item 7).** 240 s with no observable
+  progress -> Lumina 1 re-sends a per-phase hint naming the next step
+  (`LC_IDLE_S` knob). It duplicates what hailing Lumina 1 answers anyway.
+- **Persist channel (audit item 3).** Every `lc_notify` line is mirrored into
+  each active ship's log, so the crew can re-read it after the comms popup is
+  gone. The pull channel was already strong: Lumina 1's page is the
+  "latest mission status + hints" queryable orders source.
+- Crew loss remains deliberately recoverable, not a defeat: the GM can spawn a
+  replacement ship, and cargo ejects as containers at the wreck.
+
+## Communication-testing update (2026-10-18)
+
+The channels above are now asserted headlessly, not just designed
+(ee-skills/testing/communication-testing.md):
+
+- `lc_notify(msg, from)` is the push AND persist choke point (it mirrors every
+  line into each active ship's log), so one `ee_spy("lc_notify")` covers both.
+- tests/scenario_40_lostcluster.communication.autotest.lua asserts: the
+  status / who-has pull pages by reply label, the phase-1 idle hint with
+  `LC_IDLE_S` shrunk to 8 from the driver, the Tampere-1 station-loss
+  announcement ("spilled adrift near sector ..."), and the part spill itself
+  (`parts["H200 GPU nodes"].cont.a` valid, never delivered/carried).
+- Run:
+    AUTOTEST=tests/scenario_40_lostcluster.communication.autotest.lua \
+      ./tools/func_test.sh scenarios/scenario_40_lostcluster.lua
+- Not headless-assertable (human-acceptance list): ship-log rendering and
+  ordering (no read API for the ship log), popup rendering/colors.

@@ -191,6 +191,16 @@ function notify(msg, from)
     table.insert(msgq, { msg = msg, from = from, until_s = clock + 25, done = {} })
 end
 
+-- Persist-channel choke point (ee-skills/testing/communication-testing.md):
+-- every ship-log write goes through log(), never a raw addToShipLog, so a
+-- driver can spy on it (ee_spy("log")) and assert what the crew was told.
+function log(msg, color)
+    for _, p in ipairs(active_players()) do
+        pcall(function() p:addToShipLog(msg, color) end)
+    end
+    return msg
+end
+
 function pump_messages()
     if #msgq == 0 then return end
     local players = active_players()

@@ -85,14 +85,45 @@ Anti-softlock (the mission can always finish)
   tests/scenario_42_feverrun.defeat.autotest.lua guards it:
     AUTOTEST=tests/scenario_42_feverrun.defeat.autotest.lua \
       ./tools/func_test.sh scenarios/scenario_42_feverrun.lua
+- Coldfield Relay destroyed before cases A+B are loaded: defeat is declared
+  (the medical locker and crane are gone with it). After loading, its loss is
+  survivable - the delivery happens at Sedgeon.
+- Mid-phase failures (anti-softlock test (e)): Polaris destroyed before the
+  codes exist -> the relay override re-acquires them; case C shot to pieces ->
+  the drop-watch respawns it.
+  tests/scenario_42_feverrun.lost-case.autotest.lua guards both:
+    AUTOTEST=tests/scenario_42_feverrun.lost-case.autotest.lua \
+      ./tools/func_test.sh scenarios/scenario_42_feverrun.lua
 - All crew ships destroyed: defeat; no hang.
+
+Player communication (authoring/player-communication.md audit)
+--------------------------------------------------------------
+- Push: every transition, scan, trap and defeat goes through the notify queue
+  (retry while a player is in a dialog).
+- Pull: Meridian answers "What are my current orders?" with a per-phase line
+  (fr_orders); Coldfield's page restates its own state and can "Mark the next
+  objective on our nav" as a waypoint (aimed between the two broadcasters
+  during triage, so it never spoils the puzzle).
+- Persist: every beat is mirrored into the ship log (yellow/red/green tags) -
+  all writes flow through the fr_log(msg, color) choke point (never a raw
+  addToShipLog), which is what makes the channel spy-able in a driver
+  (ee-skills/testing/communication-testing.md).
+- Recovery: 240 s with no progress -> a station re-sends a hint naming the
+  next step (FR.idle_s knob; never talks over an active beat).
 
 Files & tests
 -------------
 - scenarios/scenario_42_feverrun.lua        the mission (one file)
 - tests/scenario_42_feverrun.autotest.lua   full-mission driver
+- tests/scenario_42_feverrun.defeat.autotest.lua   Polaris destroyed pre-load
+- tests/scenario_42_feverrun.lost-case.autotest.lua   relay-loss + drop-watch respawn
+- tests/scenario_42_feverrun.communication.autotest.lua   communication channels:
+  orders pulls by label, waypoint count/aim (incl. the no-spoiler fudge), idle
+  hint with FR.idle_s shrunk to 8, fr_log/notify spies, description flips
 - Run:  ./tools/smoke_test.sh scenarios/scenario_42_feverrun.lua
         ./tools/func_test.sh  scenarios/scenario_42_feverrun.lua
+        AUTOTEST=tests/scenario_42_feverrun.communication.autotest.lua \
+          ./tools/func_test.sh scenarios/scenario_42_feverrun.lua
 - The driver asserts: boot census, dialog contract (one message per
   page), refused load without codes, trap springs on proximity,
   hookless ambush wipe still clears (polled watcher), codes over

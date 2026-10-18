@@ -97,11 +97,21 @@ Items 1–7 are the communication half of the review in
 
 ## 6. What headless tests can check
 
-* Transition push: if the scenario queues messages, the driver asserts the queue
-  state after each beat (a driver shares the chunk — read `msgq` / the orders
-  string directly).
-* Recovery hint: the long-idle run (anti-softlock §8 test (b)) must show the hint
-  line arriving on the queue/console within the hint window.
+Most of this is now directly testable — see
+[../testing/communication-testing.md](../testing/communication-testing.md) for
+the full channel × testability matrix and the patterns. In short:
+
+* **Push** (notify queue): `ee_spy("notify")` + `ee_spy_seen` — assert the crew
+  was *told*, at the same beat as the state change. Prefer the spy over reading
+  `msgq` directly: it proves the write happened, not just that it was queued.
+* **Pull** (orders / status pages): dialog walker + `ee_dlg_click_by_label`,
+  asserting the rendered text.
+* **Persist** (ship log): only through the `log()` choke point (`ee_spy("log")`)
+  — there is no read API for the ship log headlessly.
+* **Recovery hint**: shrink the idle knob from the driver and wait on the hint
+  through the spy.
+* **Descriptions**: `getDescription()` is readable; assert label flips at each
+  beat (text-through-one-function convention).
 * Everything else — did the line make sense, was the sector name readable at a
   glance, was the clue fair — belongs to the 30-minute human session
   ([testing/human-acceptance.md](../testing/human-acceptance.md)). A communication

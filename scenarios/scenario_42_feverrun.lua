@@ -32,6 +32,9 @@ FR = {
     wave_u       = 10,    -- final raiders spring this close to the colony
     case_grace_s = 15,    -- drop-watch grace before respawning case C
     notify_s     = 25,    -- notify queue retry deadline
+    idle_s       = 240,   -- no-progress seconds before a station re-sends the hint
+    beacon_x     = 64,    -- waypoint aim between the two broadcasters (units)
+    beacon_y     = -3,
 }
 
 DIFFICULTY = getScenarioSetting("Difficulty")
@@ -112,18 +115,32 @@ function notify(msg, from)
     table.insert(msgq, { msg = msg, from = from, until_s = clock + FR.notify_s, done = {} })
 end
 
+-- Persist-channel choke point (ee-skills/testing/communication-testing.md):
+-- every ship-log write goes through fr_log(), never a raw addToShipLog, so a
+-- driver can spy on it (ee_spy("fr_log")) and assert what the crew was told.
+function fr_log(msg, color)
+    for _, p in ipairs(active_players()) do
+        pcall(function() p:addToShipLog(msg, color) end)
+    end
+    return msg
+end
+
 function pump_messages()
     if #msgq == 0 then return end
     local players = active_players()
     for i = #msgq, 1, -1 do
         local q = msgq[i]
         local sender = q.from
-        if sender == nil or not sender:isValid() then sender = stations.meridian end
+        if sender == nil or not sender:isValid() then
+            for _, st in pairs(stations) do
+                if st:isValid() then sender = st break end
+            end
+        end
         local waiting = false
         for _, p in ipairs(players) do
             local key = p:getCallSign()
             if key == nil or key == "" then key = tostring(p) end
-            if not q.done[key] then
+            if not q.done[key] and sender ~= nil and sender:isValid() then
                 if sender:sendCommsMessage(p, q.msg) then
                     q.done[key] = true
                 else
@@ -264,6 +281,13 @@ function commsMeridian_replies(t, src)
         math.abs(0)
         setCommsMessage("Meridian out.")
     end)
+    -- Appended after the originals so the reply indexes the autotest driver
+    -- clicks stay stable.
+    addCommsReply("What are my current orders?", function(comms_source, comms_target)
+        math.abs(0)
+        setCommsMessage(fr_orders())
+        commsMeridian_replies(t, comms_source or src)
+    end)
 end
 
 -- ========================= comms: Coldfield Relay =========================
@@ -305,6 +329,26 @@ function commsRelay_replies(t, src)
     addCommsReply("Nothing to report.", function(comms_source, comms_target)
         math.abs(0)
         setCommsMessage("Coldfield out.")
+    end)
+    -- New replies are appended AFTER the originals so the reply indexes the
+    -- autotest driver clicks stay stable.
+    addCommsReply("Mark the next objective on our nav.", function(comms_source, comms_target)
+        math.abs(0)
+        local p = comms_source
+        if p == nil or not p:isValid() then p = active_players()[1] end
+        if p == nil or not p:isValid() then return end
+        -- Phase 2 aims between the two broadcasters on purpose: a waypoint on
+        -- Polaris's hull would answer the triage puzzle for the crew.
+        local wx, wy = U(FR.beacon_x), U(FR.beacon_y)
+        if phase <= 1 or phase == 3 then
+            wx, wy = t:getPosition()
+        elseif phase >= 4 then
+            wx, wy = stations.colony:getPosition()
+        end
+        if p:getWaypointCount() >= 9 then p:commandRemoveWaypoint(9) end
+        p:commandAddWaypoint(wx, wy)
+        setCommsMessage("Waypoint set for sector " .. getSectorName(wx, wy) .. ".")
+        commsRelay_replies(t, comms_source or src)
     end)
 end
 
@@ -397,6 +441,23 @@ function commsDecoy_replies(t, src)
 end
 
 -- ========================= gate actions (shared with probes) =========================
+-- Pull channel (player-communication audit item 2): one queryable orders line,
+-- rewritten by the phase state; Meridian's comms page exposes it.
+function fr_orders()
+    if phase == 1 then
+        return "Current orders: set course for Coldfield Relay and hail them."
+    elseif phase == 2 then
+        return "Current orders: work out which beacon near " .. sector_polaris ..
+            " is the real Polaris - scan both before you trust either."
+    elseif phase == 3 then
+        return "Current orders: return to Coldfield Relay and load cases A and B."
+    elseif not delivered then
+        return "Current orders: deliver all three cases to Sedgeon Colony in " ..
+            sector_colony .. " - come alongside and hail the med unit."
+    end
+    return "Current orders: none. The vaccine is delivered."
+end
+
 function act_restock()
     local players = active_players()
     if #players == 0 then return "No ship to restock." end
@@ -511,7 +572,7 @@ function init()
     sector_polaris = getSectorName(U(60), U(-8))
     sector_colony  = getSectorName(U(55), U(60))
 
-    pcall(function() player:addToShipLog("Meridian orders: vaccine run to Sedgeon Colony. Courier Polaris missing with case C.", "yellow") end)
+    fr_log("Meridian orders: vaccine run to Sedgeon Colony. Courier Polaris missing with case C.", "yellow")
     notify("Meridian to Epsilon: Sedgeon Colony has a fever outbreak. The " ..
         "vaccine is due - cases A and B at Coldfield Relay, case C with the " ..
         "courier Polaris, who has gone quiet. Get underway.", stations.meridian)
@@ -527,6 +588,7 @@ function update(delta)
     local players = active_players()
     if #players > 0 then ever_had_players = true end
     pump_messages()
+    watch_idle(players)      -- communication audit item 7: the idle hint
     watch_cleared()          -- combat bookkeeping settles even after victory
     if done then return end
     ensure_ftl(players)
@@ -611,7 +673,7 @@ function watch_trap(players)
             end)
             notify("It is a trap! Two raiders just lit up behind that 'tug' - " ..
                 "the transponder never was Coldfield's.", stations.relay)
-            pcall(function() player:addToShipLog("COLDFIELD-2 was bait. Raiders engaging.", "red") end)
+            fr_log("COLDFIELD-2 was bait. Raiders engaging.", "red")
             return
         end
     end
@@ -629,7 +691,7 @@ function watch_wave(players)
             end)
             notify("Sedgeon control: two raider signatures inbound on the colony. " ..
                 "Whatever you brought us, they want it stopped.", stations.colony)
-            pcall(function() player:addToShipLog("Raiders inbound on Sedgeon. Weapons free.", "red") end)
+            fr_log("Raiders inbound on Sedgeon. Weapons free.", "red")
             return
         end
     end
@@ -644,6 +706,37 @@ function watch_override()
         notify("Coldfield Relay: headquarters found an override key in the " ..
             "paperwork. The medical locker is open - we should not have made you " ..
             "chase a courier for it.", stations.relay)
+    end
+end
+
+-- Idle hint (player-communication audit item 7): after FR.idle_s seconds with
+-- no observable progress, a station re-sends a line that names the next step.
+-- Any state change in the progress key resets the clock, so this never talks
+-- over an active beat.
+fr_idle_prog = nil
+fr_idle_mark = 0
+function watch_idle(players)
+    if #players == 0 then return end
+    local prog = table.concat({ tostring(phase), tostring(codes), tostring(loaded),
+        tostring(case_c_aboard), tostring(ambush_done), tostring(wave_done) }, ":")
+    if prog ~= fr_idle_prog then
+        fr_idle_prog = prog
+        fr_idle_mark = clock
+        return
+    end
+    if clock - fr_idle_mark >= FR.idle_s then
+        fr_idle_mark = clock
+        if phase == 1 then
+            notify("Meridian: set course for Coldfield Relay - cases A and B are waiting there.", stations.meridian)
+        elseif phase == 2 then
+            notify("Coldfield Relay: hail us, or scan the two beacon ships near " ..
+                sector_polaris .. " - one of them is Polaris.", stations.relay)
+        elseif phase == 3 then
+            notify("Coldfield Relay: the medical locker is open - come alongside and we will load cases A and B.", stations.relay)
+        else
+            notify("Sedgeon med unit: bring all three cases alongside in " ..
+                sector_colony .. " and hail us for the transfer.", stations.colony)
+        end
     end
 end
 
@@ -664,7 +757,7 @@ function phase_check(players)
                         "Polaris - hail us, or just look at the beacons near " ..
                         sector_polaris .. ". Two ships are broadcasting there. One lies.",
                         stations.relay)
-                    pcall(function() player:addToShipLog("Arrived Coldfield Relay. Polaris missing near " .. sector_polaris .. ".", "yellow") end)
+                    fr_log("Arrived Coldfield Relay. Polaris missing near " .. sector_polaris .. ".", "yellow")
                     print("FR: phase 2 (triage)")
                 end
                 break
@@ -676,12 +769,12 @@ function phase_check(players)
             notify("Coldfield Relay: all three cases accounted for. Final leg to " ..
                 "Sedgeon, " .. sector_colony .. ". Watch the dust lane on the way in.",
                 stations.relay)
-            pcall(function() player:addToShipLog("Vaccine aboard. Final leg: Sedgeon Colony.", "green") end)
+            fr_log("Vaccine aboard. Final leg: Sedgeon Colony.", "green")
             print("FR: phase 4 (deliver)")
         end
     elseif phase == 4 and delivered then
         done = true
-        pcall(function() player:addToShipLog("Vaccine delivered. Sedgeon thanks the crew of the Epsilon.", "green") end)
+        fr_log("Vaccine delivered. Sedgeon thanks the crew of the Epsilon.", "green")
         notify("Meridian to Epsilon: vaccine delivered and a courier rescued on " ..
             "your first run. The fleet could use more ships like yours.", stations.meridian)
         victory("Human Navy")
@@ -694,6 +787,18 @@ function phase_check(players)
     end
     if wave_spawned and not wave_done and #groups.wave > 0 and all_dead(groups.wave) then
         mark_wave_cleared()
+    end
+
+    -- Coldfield Relay gone before cases A and B are aboard (friendly fire, GM
+    -- removal, stray fire): the locker and its crane are gone with it, so the
+    -- delivery can never happen - defeat, not a phase 3 that polls forever.
+    if not done and not loaded and not stations.relay:isValid() then
+        done = true
+        notify("Coldfield Relay has been destroyed - cases A and B were lost " ..
+            "with it. The vaccine run has failed.", stations.meridian)
+        victory("Exuari")
+        print("FR: relay lost")
+        return
     end
 
     -- Sedgeon gone (wave the crew never intercepted, friendly fire, GM
@@ -729,14 +834,14 @@ end
 function mark_ambush_cleared()
     ambush_done = true
     notify("Ambush cleared. Coldfield Relay logs your gunnery with gratitude.", stations.relay)
-    pcall(function() player:addToShipLog("Ambush raiders destroyed.", "green") end)
+    fr_log("Ambush raiders destroyed.", "green")
     print("FR: ambush cleared")
 end
 
 function mark_wave_cleared()
     wave_done = true
     notify("Sedgeon control: raiders down before they reached the wards. Nicely flown.", stations.colony)
-    pcall(function() player:addToShipLog("Colony raiders destroyed.", "green") end)
+    fr_log("Colony raiders destroyed.", "green")
     print("FR: wave cleared")
 end
 

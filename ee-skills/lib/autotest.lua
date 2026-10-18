@@ -10,9 +10,14 @@
 --
 -- Minimal driver:
 --   ee_step(2,  function() ee_check(probe_state() ~= nil, "world built") end)
---   ee_step(20, function() ee_until("patrol wiped", 40, function() ... end) end)
+--   ee_step(20, function() ee_wait("patrol wiped", 40,
+--       function() return all_dead(pool) end,
+--       function() ee_check(#pool == 0, "pool cleared") end) end)
 --   function ee_on_finish() ee_check(..., "final invariant") end
 --   ee_finish_at = 300        -- safety net so the run always ends
+-- ee_wait runs its cont() once on success (the engine has no coroutines, so
+-- nothing truly blocks); ee_until is the plain async poll variant (assert its
+-- outcome only in a LATER step).
 
 ee_ok, ee_fail, ee_clock = 0, 0, 0
 ee_steps, ee_pollers, ee_mercs = {}, {}, {}
@@ -41,6 +46,66 @@ end
 -- #1 source of false failures.
 function ee_until(msg, deadline, fn)
     table.insert(ee_pollers, { msg = msg, deadline = ee_clock + deadline, fn = fn, done = false })
+end
+
+-- Wait-with-continuation: polls fn() every tick (like ee_until) and, on
+-- success, runs cont() ONCE in a pcall - put the assertions that DEPEND on the
+-- outcome there. The engine sandbox strips the coroutine library, so a truly
+-- blocking wait is impossible [obs]: "wait, then continue" must be written as
+-- a continuation, and lines after the ee_wait call still run immediately.
+-- Without cont it behaves exactly like ee_until.
+function ee_wait(msg, deadline, fn, cont)
+    table.insert(ee_pollers, { msg = msg, deadline = ee_clock + (deadline or 60),
+                               fn = fn, done = false, cont = cont })
+end
+
+-- Every-tick invariant (anti-softlock as runtime maths): fn() must be true on
+-- EVERY tick from registration until the run ends; the first false (or an
+-- error) fails and stops the check. Cheapest guard for "progress is always
+-- possible": e.g. at least one valid station remains, or a drop-watch is
+-- armed while a part is adrift.
+function ee_invariant(msg, fn)
+    table.insert(ee_pollers, { msg = msg, fn = fn, invariant = true, done = false })
+end
+
+-- ------------------------------------------------------------------- spies
+-- Wrap a scenario GLOBAL function (a channel "choke point": notify, log, ...)
+-- so every call is recorded and then passed through untouched. This is how a
+-- driver asserts PUSH / PERSIST / RECOVERY communication: "the crew was TOLD
+-- X" is only observable headlessly if the scenario routes every write of that
+-- channel through one named function (testing/communication-testing.md).
+ee_spies = {}
+function ee_spy(name)
+    local rec = ee_spies[name]
+    if rec ~= nil then return rec end
+    local orig = _G[name]
+    rec = { name = name, calls = {} }
+    _G[name] = function(...)
+        local args = {}
+        for i = 1, select("#", ...) do
+            args[i] = tostring(select(i, ...))
+        end
+        table.insert(rec.calls, { args = args, clock = ee_clock })
+        if orig ~= nil then return orig(...) end
+    end
+    ee_spies[name] = rec
+    return rec
+end
+
+-- First spy call at/after game-second `since` whose concatenated arguments
+-- match the Lua pattern; the call record, or nil. Typical use:
+--   ee_spy("notify")
+--   ee_check(ee_spy_seen("notify", "warp jump") ~= nil, "crew told to warp")
+function ee_spy_seen(name, pattern, since)
+    ee_spy(name)                        -- ensure installed even if never armed
+    local rec = ee_spies[name]
+    for _, c in ipairs(rec.calls) do
+        if (since == nil or c.clock >= since)
+            and string.find(table.concat(c.args, " "), pattern) then
+            return c
+        end
+    end
+    return nil
 end
 
 function ee_finish(reason)
@@ -97,6 +162,27 @@ function ee_dlg_click(d, idx, target, source)
     ee_dlg_restore()
     ee_check(ok, "reply click runs without error: " .. tostring(err or reply.label))
     return d.msgs
+end
+
+-- Click by label instead of index: reply ORDER is unstable while authoring
+-- (new replies must append after the originals - an index click then hits the
+-- wrong reply and the assertion breaks or, worse, passes wrongly). Exact
+-- match first, then Lua pattern; returns the messages the click rendered.
+function ee_dlg_click_by_label(d, label, target, source)
+    local idx
+    for i, r in ipairs(d.replies) do
+        if r.label == label then idx = i break end
+    end
+    if idx == nil then
+        for i, r in ipairs(d.replies) do
+            if string.find(r.label, label) then idx = i break end
+        end
+    end
+    if idx == nil then
+        ee_check(false, "dialog has a reply matching \"" .. tostring(label) .. "\"")
+        return {}
+    end
+    return ee_dlg_click(d, idx, target, source)
 end
 
 -- ------------------------------------------------------------------- killing
@@ -226,11 +312,21 @@ if victory ~= nil and not ee_victory_wrapped then
     victory = function(faction)
         local ok, err = pcall(ee_real_victory, faction)
         ee_check(ok, "victory(" .. tostring(faction) .. ")" .. (ok and "" or (": " .. tostring(err))))
+        if ee_expect_victory_faction ~= nil then
+            ee_check(faction == ee_expect_victory_faction,
+                "victory faction is " .. tostring(ee_expect_victory_faction)
+                .. " (got " .. tostring(faction) .. ")")
+        end
         ee_finish("victory declared")
         return ok
     end
     ee_victory_wrapped = true
 end
+
+-- Assert the faction the mission ends for ("victory(Kraylor)" for a defeat,
+-- "victory(Human Navy)" for a win). The wrapper above evaluates it; without
+-- it the printed faction is only decoration nobody can assert on.
+function ee_expect_victory(faction) ee_expect_victory_faction = faction end
 
 function update(delta)
     ee_clock = ee_clock + (delta or 0)
@@ -253,8 +349,20 @@ function update(delta)
                 ee_fail = ee_fail + 1
                 print("EE-ASSERT ERROR (poll): " .. tostring(hit))
                 p.done = true
+            elseif p.invariant then
+                if not hit then
+                    ee_check(false, p.msg)
+                    p.done = true
+                end
             elseif hit then
                 ee_check(true, p.msg)
+                if p.cont ~= nil then
+                    local ok2, err2 = pcall(p.cont)
+                    if not ok2 then
+                        ee_fail = ee_fail + 1
+                        print("EE-ASSERT ERROR (cont): " .. tostring(err2))
+                    end
+                end
                 p.done = true
             elseif ee_clock > p.deadline then
                 ee_check(false, p.msg)

@@ -1,0 +1,103 @@
+================================================================
+ scenario_42_feverrun - "Fever Run" - BRIEF
+================================================================
+
+Warning: fully AI generated scenario, use with caution.
+
+TL;DR
+-----
+A one-hour story mission for a NEW crew. Sedgeon Colony has a fever
+outbreak and its vaccine is overdue. The crew must reach a relay
+station, work out which of two broadcasting ships is the real
+(and missing) medical courier - the other one is a disguised pirate
+decoy - collect all three vaccine cases, and deliver them to the
+colony. Two short, easy fights happen on the way. Nothing here is
+tuned to kill a careful crew; the fights are side events to the
+story, not the story.
+
+The story, in order (7 beats)
+-----------------------------
+1.  BRIEFING at Meridian Starbase (start): ship log + hail explain
+    the errand. Objective: fly to Coldfield Relay.
+2.  ARRIVAL at Coldfield Relay (within 6u): the relay reveals the
+    problem - courier POLARIS went missing with vaccine case C near
+    sector E8. Two ships are broadcasting there. One lies.
+3.  TRIAGE (the puzzle): science scans settle it.
+      - The ship answering to "POLARIS" scans as the real, crippled
+        medical courier: hail her, verify credentials, receive the
+        MEDICAL ACCESS CODES. Her case (CASE C) floats adrift next
+        to her - fly over it to collect (a physical pickup).
+      - The ship answering to "COLDFIELD-2" claims to be a relay
+        tug. Scanning it reveals an Exuari hull - bait. Approaching
+        it within 2.5u springs an ambush: 2 weak Exuari raiders
+        attack. (Trap first, scan later = the fight happens; it is
+        survivable and optional in every other way.)
+4.  LOADING: return to Coldfield Relay. The medical locker opens
+    with the codes; come alongside (within 1.4u) and the crane
+    loads CASES A and B.
+5.  FINAL LEG: warp to Sedgeon Colony across a nebula dust lane.
+6.  AMBUSH AT THE COLONY (side event): within 10u of the colony,
+    2 Exuari raiders spawn and attack THE COLONY, not the crew.
+    The crew defends their delivery: kill them before they crack
+    the station. They are weak; the colony tanks for a while.
+7.  DELIVERY: come alongside Sedgeon (within 1.4u), hail the med
+    unit, hand over three cases. Victory. Epilogue in the ship log.
+
+What each station does
+----------------------
+- HELM:      routes, warp hops, the fly-over pickup of case C,
+             holding station alongside two stations, the nebula
+             crossing, not ramming the rock cluster off the lane.
+- WEAPONS:   two-to-three short fights vs 2x "Adder MK4" raiders
+             each (trap ambush, colony wave). Nothing bigger.
+- SCIENCE:   the triage puzzle - two ships to scan, scan results
+             flip their descriptions and unlock/avoid plot; link a
+             probe or two if the crew wants the raw plot.
+- RELAY:     all station hails (Meridian, Coldfield, Sedgeon),
+             the courier hail, waypoints for the route, and free
+             missile/probe restocks at Meridian and Coldfield.
+- ENGINEERING: power for the warp hops, shield/repair work during
+             the two fights, normal damage control.
+
+Balance & settings
+------------------
+- Difficulty setting "Normal" (default) = as described.
+- "Story": the crew's beams one-shot anything they hit (buff
+  applied per hull in update(), so late joiners are covered).
+- Crew hull: starts in an "Atlantis"; any stock hull works (the
+  scenario installs warp on hulls that lack it).
+- Rep is not used; restocks are free. Time pressure is fiction,
+  not a timer.
+
+Anti-softlock (the mission can always finish)
+---------------------------------------------
+- Codes lost (Polaris destroyed, or triage never done): 300 s after
+  arrival the relay itself produces an override key (notify + unlock).
+- Out-of-order play is safe: a crew that triages the beacons BEFORE
+  ever visiting the relay (codes taken at phase 1) still finishes -
+  the phase machine is order-proof, and
+  tests/scenario_42_feverrun.early-codes.autotest.lua guards it:
+    AUTOTEST=tests/scenario_42_feverrun.early-codes.autotest.lua \
+      ./tools/func_test.sh scenarios/scenario_42_feverrun.lua
+- Case C container destroyed: a drop-watch respawns it 15 s later.
+- Colony destroyed before delivery (crew abandons the defense):
+  defeat is declared; no hang.
+- All crew ships destroyed: defeat; no hang.
+
+Files & tests
+-------------
+- scenarios/scenario_42_feverrun.lua        the mission (one file)
+- tests/scenario_42_feverrun.autotest.lua   full-mission driver
+- Run:  ./tools/smoke_test.sh scenarios/scenario_42_feverrun.lua
+        ./tools/func_test.sh  scenarios/scenario_42_feverrun.lua
+- The driver asserts: boot census, dialog contract (one message per
+  page), refused load without codes, trap springs on proximity,
+  hookless ambush wipe still clears (polled watcher), codes over
+  comms after a scan, probe pickup, alongside load, organic kill of
+  the colony wave (mercenary squad), delivery, victory.
+- Headless stand-ins (a headless hull never moves, scans or
+  collides): probe_warp_to / probe_scan / probe_pickup - each
+  shares bookkeeping with the real path. Human-acceptance
+  checklist: fly over case C for the real onPickUp; real science
+  scans flip the beacon descriptions; real dock/undock at the two
+  gates; story-mode beam buff.

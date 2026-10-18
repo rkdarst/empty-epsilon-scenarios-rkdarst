@@ -7,6 +7,7 @@
 | [from-brief-to-code.md](from-brief-to-code.md) | turning a design brief into an outline and then into the file |
 | [brief-guide.md](brief-guide.md) | you are writing the brief itself (facts / feel / flavour / ask) |
 | [anti-softlock.md](anti-softlock.md) | before you call a mission finishable |
+| [player-communication.md](player-communication.md) | before you call the mission *understandable* — what/where/how/did-it-work per moment |
 | [flow-diagrams.md](flow-diagrams.md) | you want the mental model of how the engine runs your file |
 
 ## The loop

@@ -89,3 +89,10 @@ still a failure.
 * **Never** advance a phase from inside a dialog callback *and* from the poll
   loop without a guard: two advances in one tick double-spawn the next phase's
   ships. `[obs]`
+* **Sampling branches read state, they do not write it.** A branch that fires on
+  "player is near X" and unconditionally sets `phase = 2` will stomp a crew that
+  already completed phase 2's work (took the codes before arriving). Read the
+  world facts and bump: `if codes then phase = 3 else phase = 2 end` — and arm
+  any deadline only in the branch where the prerequisite is actually missing.
+  Worked example + mitigations:
+  [authoring/anti-softlock.md §3/§7](../authoring/anti-softlock.md). `[obs]`

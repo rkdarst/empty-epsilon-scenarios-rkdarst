@@ -72,4 +72,6 @@ polling `update()`, then dialogs, then `probe_*` hooks, then the driver.
 | G6 | plays well | 30 min of human play (see [testing/human-acceptance.md](../testing/human-acceptance.md)) |
 
 G5 is the one teams skip and the one that ruins a session. See
-[authoring/anti-softlock.md](anti-softlock.md).
+[authoring/anti-softlock.md](anti-softlock.md). The communication half of G6 is
+auditable before any human session: see
+[authoring/player-communication.md](player-communication.md).

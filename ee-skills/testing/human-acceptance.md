@@ -33,6 +33,7 @@ your repo).
 | 10 | **Victory** ends the mission with the crew alive and the outcome stated | victory fired but the world kept spawning |
 | 11 | **GM console**: the page tree opens, every button changes something, every page returns | a button that redraws nothing = callback registration failed (`Upvalue 1 ...`, invisible in-game) |
 | 12 | **GM labels** each fit their button with the verb readable (the cell centers text; over ~20 chars both ends are cut) | a label that only looks wrong on a real screen - the driver asserts the 20-char budget, the eye confirms it |
+| 13 | At any pause, a crew member can **state the current objective** (what / where / how) without opening the scenario file | "what are we doing now?" mid-session = the push was lost and no pull channel answers (see [authoring/player-communication.md](../authoring/player-communication.md)) |
 
 Anything that fails gets a knob change or a pattern fix, then `ee_func.sh` before
 the next session.

@@ -696,8 +696,10 @@ function phase_check(players)
         mark_wave_cleared()
     end
 
-    -- Colony falls (crew never intercepted the wave): mission unwinnable.
-    if not done and not delivered and wave_spawned and not stations.colony:isValid() then
+    -- Sedgeon gone (wave the crew never intercepted, friendly fire, GM
+    -- removal): delivery is impossible, so defeat must be declared whatever
+    -- killed it - not only when the wave was spawned.
+    if not done and not delivered and not stations.colony:isValid() then
         done = true
         notify("Sedgeon has gone dark. Without the colony there is no one left to cure.", stations.meridian)
         victory("Exuari")

@@ -80,8 +80,11 @@ Anti-softlock (the mission can always finish)
     AUTOTEST=tests/scenario_42_feverrun.early-codes.autotest.lua \
       ./tools/func_test.sh scenarios/scenario_42_feverrun.lua
 - Case C container destroyed: a drop-watch respawns it 15 s later.
-- Colony destroyed before delivery (crew abandons the defense):
-  defeat is declared; no hang.
+- Colony destroyed before delivery (wave, friendly fire, GM removal - any
+  cause, any phase): defeat is declared; no hang.
+  tests/scenario_42_feverrun.defeat.autotest.lua guards it:
+    AUTOTEST=tests/scenario_42_feverrun.defeat.autotest.lua \
+      ./tools/func_test.sh scenarios/scenario_42_feverrun.lua
 - All crew ships destroyed: defeat; no hang.
 
 Files & tests

@@ -26,6 +26,7 @@ constraints and which are musings. That guessing is where missions go wrong.
 | "there are nebulae" | no scale | "a 6-cloud nebula ring around the target site, ~12u radius" |
 | "not too hard" | untestable | "a competent crew should win the first ambush losing no hull" |
 | "hidden station" | hides it from whom? | "the crew must not know it is ours until they arrive" (→ faction flip) |
+| "make it puzzle-like" | does not say what is told vs withheld | "Easy states action+place+verb per objective; the frequency puzzle names the mechanic, never the answer" (→ [player-communication.md](player-communication.md) §3) |
 
 ## The Ask slot is the load-bearing one
 
